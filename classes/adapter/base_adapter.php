@@ -341,6 +341,38 @@ abstract class base_adapter {
     }
 
     /**
+     * Clear a gradebook override (grade_grades.overridden) for the given user
+     * on this activity. Leaves a locked grade alone — that's an admin-set
+     * lockout, not a teacher concern. Uses grade_grade::set_overridden(false,
+     * true) so refresh_grades runs and the gradebook cell reverts to whatever
+     * the activity currently reports.
+     *
+     * @param int $userid
+     * @return bool True when an override was cleared.
+     */
+    protected function clear_recoverable_gradebook_block(int $userid): bool {
+        $gradeitem = $this->fetch_grade_item();
+        if (!$gradeitem) {
+            return false;
+        }
+        $gradegrade = \grade_grade::fetch([
+            'itemid' => $gradeitem->id,
+            'userid' => $userid,
+        ]);
+        if (!$gradegrade) {
+            return false;
+        }
+        if (!empty($gradegrade->locked) || !empty($gradeitem->locked)) {
+            return false;
+        }
+        if (empty($gradegrade->overridden)) {
+            return false;
+        }
+        $gradegrade->set_overridden(false, true);
+        return true;
+    }
+
+    /**
      * Perform a submission management action.
      *
      * Override in concrete adapters that support submission actions.

@@ -62,7 +62,7 @@ class save_grade extends external_api {
             ),
             'reset' => new external_value(
                 PARAM_BOOL,
-                'When true, treat the call as a deliberate reset: clear the grade, push -1 to the gradebook, and remove any submission row that has not actually been submitted by the student (orphan rows created by accidental teacher interaction). A real submitted row is left alone.',
+                'Deliberate reset: clear the grade and remove any orphan submission row that was not student-submitted.',
                 VALUE_DEFAULT,
                 false,
             ),

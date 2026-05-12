@@ -749,50 +749,6 @@ class assign_adapter extends base_adapter {
     }
 
     /**
-     * Clear gradebook flags that would silently block a marking-guide / rubric
-     * save through mod_assign — but only the *recoverable* ones (the
-     * `overridden` flag). Leaves `locked` alone (that's an explicit lockout
-     * by an admin) and does nothing for the marking-workflow path. Mirrors
-     * what a teacher would do in the gradebook UI before re-grading.
-     *
-     * @param int $userid Student user id.
-     */
-    private function clear_recoverable_gradebook_block(int $userid): bool {
-        $gradeitem = \grade_item::fetch([
-            'itemtype' => 'mod',
-            'itemmodule' => 'assign',
-            'iteminstance' => $this->cm->instance,
-            'itemnumber' => 0,
-            'courseid' => $this->course->id,
-        ]);
-        if (!$gradeitem) {
-            return false;
-        }
-        $gradegrade = \grade_grade::fetch([
-            'itemid' => $gradeitem->id,
-            'userid' => $userid,
-        ]);
-        if (!$gradegrade) {
-            return false;
-        }
-        // Locked grades stay locked — admin must address.
-        if (!empty($gradegrade->locked) || !empty($gradeitem->locked)) {
-            return false;
-        }
-        if (empty($gradegrade->overridden)) {
-            return false;
-        }
-        // Use the proper API rather than setting overridden=0 + update()
-        // directly. set_overridden(false, true) also calls
-        // grade_item->refresh_grades($userid), which keeps the gradebook
-        // cell consistent with the activity's reported grade after the
-        // override is lifted. Without that refresh, finalgrade can stay
-        // pinned to the override value even though the flag is cleared.
-        $gradegrade->set_overridden(false, true);
-        return true;
-    }
-
-    /**
      * Save grade and feedback directly, bypassing the grading form.
      *
      * Used when advanced grading is active but no criteria data is provided

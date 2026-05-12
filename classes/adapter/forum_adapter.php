@@ -443,7 +443,14 @@ class forum_adapter extends base_adapter {
             $controller = $gradingmanager->get_active_controller();
         }
 
-        if ($controller && !empty($advancedgradingdata)) {
+        // A null grade is the teacher's "ungrade me" signal (typing "-").
+        // Always take the direct path in that case — even when advanced
+        // grading is active — so we nullify forum_grades.grade rather than
+        // letting the rubric processor write a freshly-computed value back
+        // in. The teacher's intent is "clear this", not "save the rubric".
+        if ($grade === null) {
+            $this->save_grade_directly($userid, null);
+        } else if ($controller && !empty($advancedgradingdata)) {
             // Advanced grading with criteria data — use the gradeitem API.
             $graderecord = $this->gradeitem->get_grade_for_user($gradeduser, $graderuser);
             $gradinginstance = $this->gradeitem->get_advanced_grading_instance(
@@ -1364,6 +1371,40 @@ class forum_adapter extends base_adapter {
 })();
 </script>
 SCRIPT;
+    }
+
+    /**
+     * Deliberate reset for forums.
+     *
+     * Forums don't have a separate "submission" object the way mod_assign does
+     * — a student's "submission" is their posts, which the teacher must NOT
+     * delete. So the deliberate reset here is narrower: remove the orphan
+     * forum_grades row entirely (so the student stops showing as "graded"
+     * when they never were), lift any gradebook override, and push null
+     * through to the gradebook.
+     *
+     * @param int $userid
+     * @return bool
+     */
+    public function reset_grade_and_submission(int $userid): bool {
+        global $DB;
+
+        // Drop the forum_grades row outright. Setting grade=null leaves the
+        // row in place which is fine for re-grading, but a deliberate reset
+        // should leave no trace — the student should show as "nosubmission"
+        // or "submitted" depending on whether they have posts.
+        $DB->delete_records('forum_grades', [
+            'forum' => $this->forum->get_id(),
+            'itemnumber' => 1,
+            'userid' => $userid,
+        ]);
+
+        // Lift any gradebook override and push null through so the gradebook
+        // cell reflects the now-absent forum_grades row.
+        $this->clear_recoverable_gradebook_block($userid);
+        $this->sync_gradebook_penalty($userid);
+
+        return true;
     }
 
     /**
