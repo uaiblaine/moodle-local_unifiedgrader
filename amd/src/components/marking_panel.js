@@ -2258,6 +2258,21 @@ export default class extends BaseComponent {
         } else {
             const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
             grade = gradeInput ? gradeInput.value : '';
+            // Treat a bare "-" — and any other non-numeric placeholder a
+            // teacher might type — as a reset to "no grade", matching the
+            // way Moodle's gradebook accepts "-" to clear a cell. Without
+            // this normalisation a lone "-" hits the WS PARAM_FLOAT check
+            // and surfaces as an unhandled exception. An empty string is
+            // already converted to -1 (= no grade) in the saveGrade mutation.
+            if (gradeInput && grade !== '' && !isFinite(parseFloat(grade))) {
+                grade = '';
+                gradeInput.value = '';
+                // Drop the override lock too — there is no grade to override.
+                this._gradeManuallyOverridden = false;
+                this._updatePercentage();
+                this._updateFinalGradeDisplay();
+                this._updateOverrideIndicator(this._lastRubricGrade);
+            }
         }
         const feedback = this._getEditorContent();
         const advancedGradingData = this._collectAdvancedGradingData();

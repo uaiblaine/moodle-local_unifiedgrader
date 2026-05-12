@@ -232,7 +232,17 @@ export default class {
                 args: {
                     cmid,
                     userid,
-                    grade: grade !== null && grade !== '' ? parseFloat(grade) : -1,
+                    grade: (() => {
+                        if (grade === null || grade === '') {
+                            return -1;
+                        }
+                        const n = parseFloat(grade);
+                        // PARAM_FLOAT on the server rejects NaN. Treat any
+                        // non-numeric input (e.g. a lone "-" the marking_panel
+                        // missed) as a reset to "no grade" rather than letting
+                        // it surface as an unhandled exception.
+                        return isFinite(n) ? n : -1;
+                    })(),
                     feedback: feedback || '',
                     feedbackformat: 1,
                     draftitemid: draftitemid || 0,
@@ -335,7 +345,17 @@ export default class {
                     methodname: 'local_unifiedgrader_save_grade',
                     args: {
                         cmid, userid,
-                        grade: grade !== null && grade !== '' ? parseFloat(grade) : -1,
+                        grade: (() => {
+                        if (grade === null || grade === '') {
+                            return -1;
+                        }
+                        const n = parseFloat(grade);
+                        // PARAM_FLOAT on the server rejects NaN. Treat any
+                        // non-numeric input (e.g. a lone "-" the marking_panel
+                        // missed) as a reset to "no grade" rather than letting
+                        // it surface as an unhandled exception.
+                        return isFinite(n) ? n : -1;
+                    })(),
                         feedback: feedback || '',
                         feedbackformat: 1,
                         draftitemid: draftitemid || 0,
