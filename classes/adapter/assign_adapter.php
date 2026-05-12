@@ -728,6 +728,15 @@ class assign_adapter extends base_adapter {
             $this->assign->update_grade($gradeobj);
         }
 
+        // Lift any gradebook override the teacher may have applied earlier
+        // (typically via the gradebook spreadsheet view, or auto-set by the
+        // gradepenalty subsystem). Without this, the gradebook column stays
+        // pinned to the override value even though assign_grades.grade is
+        // now -1, which makes the "reset" feel half-done. set_overridden
+        // (called inside the helper) refreshes the cell from the activity
+        // so it ends up showing as ungraded.
+        $this->clear_recoverable_gradebook_block($userid);
+
         // Wipe the submission only when it isn't a real student submission.
         // remove_submission() resets status to 'new'/'reopened' and tells each
         // submission plugin to drop its data — it does not delete the row.
