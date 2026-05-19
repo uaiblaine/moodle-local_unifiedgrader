@@ -1909,11 +1909,13 @@ export default class extends BaseComponent {
                 total += num;
             }
         }
-        // Snap to 2dp to avoid the classic JS floating-point summing
-        // artifact (e.g. 4 + 3.8 + 4.1 + 2 → 13.899999999999999) in the
-        // marking-guide total badge and any grade-input value derived
-        // from it via _computeRubricGrade.
-        total = Math.round(total * 100) / 100;
+        // Snap to the gradebook's display precision (floored at 2dp) so the
+        // marking-guide total never surfaces classic JS floating-point
+        // summing artifacts (e.g. 4 + 3.8 + 4.1 + 2 → 13.899999999999999).
+        // The floor at 2dp ensures fractional rubric scores don't get
+        // silently swallowed even when the gradebook itself is set to
+        // 0 decimal places.
+        total = this._roundToGradePrecision(total);
 
         const maxTotal = this._gradingDefinition?.criteria?.reduce(
             (sum, c) => sum + (c.maxscore || 0), 0
@@ -1956,16 +1958,33 @@ export default class extends BaseComponent {
             // questions. The displayed grade is the full quiz grade adjusted
             // by the delta between current manual scores and the initial manual total.
             const delta = total - (this._guideBaseTotal ?? 0);
-            return Math.max(0, Math.round((this._quizBaseGrade + delta) * 100) / 100);
+            return Math.max(0, this._roundToGradePrecision(this._quizBaseGrade + delta));
         }
         // Normalize the guide total to the assignment's grade scale.
         // A marking guide may have a different max total than the activity
         // max grade (e.g. guide criteria sum to 13 but assignment is out of 10).
         const activityMax = parseFloat(gradeInput.max) || 0;
         if (maxTotal > 0 && activityMax > 0 && maxTotal !== activityMax) {
-            return Math.round((total / maxTotal) * activityMax * 100) / 100;
+            return this._roundToGradePrecision((total / maxTotal) * activityMax);
         }
         return total;
+    }
+
+    /**
+     * Round a number to the gradebook's display precision for this activity,
+     * floored at 2 decimal places. The floor exists because fractional
+     * rubric scores (e.g. 3.8, 4.1) would be silently swallowed if the
+     * gradebook were configured at 0dp — the marking-guide UI is an
+     * interim calculation surface and should always preserve enough
+     * precision to be useful.
+     *
+     * @param {number} value
+     * @return {number}
+     */
+    _roundToGradePrecision(value) {
+        const decimals = Math.max(2, parseInt(this._gradingDefinition?.decimalpoints ?? 2, 10));
+        const factor = Math.pow(10, decimals);
+        return Math.round(value * factor) / factor;
     }
 
     /**

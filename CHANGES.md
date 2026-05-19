@@ -1,7 +1,8 @@
 # Changelog
 
 ## v2.4.4 (2026-05-18)
-- Fix the marking-guide total badge displaying floating-point summing artifacts when the teacher entered decimal scores — `4 + 3.8 + 4.1 + 2` was being shown as `13.899999999999999 / 25` instead of `13.9 / 25`. The total is now snapped to 2 decimal places at the source so any value derived from it (the badge, the grade input via `_computeRubricGrade`, the percentage display) stays clean
+- Fix the marking-guide total badge displaying floating-point summing artifacts when the teacher entered decimal scores — `4 + 3.8 + 4.1 + 2` was being shown as `13.899999999999999 / 25` instead of `13.9 / 25`. The total is now rounded at the source so any value derived from it (the badge, the grade input via `_computeRubricGrade`, the percentage display) stays clean
+- Rounding precision follows the gradebook's per-item `decimalpoints` setting (the same one that governs gradebook column display), with a hard floor of 2 decimal places so fractional rubric scores aren't silently swallowed when the gradebook is configured at 0dp. No new plugin setting — the existing course-level gradebook config is the single source of truth. Surfaced into the serialised grading definition for all three adapters (assign, forum, quiz)
 
 ## v2.4.3 (2026-05-18)
 ### Grade reset escape hatches

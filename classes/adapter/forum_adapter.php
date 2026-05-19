@@ -1563,11 +1563,22 @@ SCRIPT;
 
         $method = get_grading_manager($this->context, 'mod_forum', 'forum')->get_active_method();
 
+        // Gradebook display precision for this activity's grade item — the
+        // marking-panel UI uses this (floored at 2dp) to round the running
+        // rubric/guide total so floating-point arithmetic artifacts don't
+        // surface in the badge.
+        $decimalpoints = 2;
+        $gradeitem = $this->fetch_grade_item();
+        if ($gradeitem && $gradeitem->get_decimals() !== null) {
+            $decimalpoints = (int) $gradeitem->get_decimals();
+        }
+
         $result = [
             'id' => (int) $definition->id,
             'method' => $method,
             'name' => $definition->name ?? '',
             'description' => $definition->description ?? '',
+            'decimalpoints' => $decimalpoints,
         ];
 
         if ($method === 'rubric' && !empty($definition->rubric_criteria)) {

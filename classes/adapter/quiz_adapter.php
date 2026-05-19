@@ -474,10 +474,16 @@ class quiz_adapter extends base_adapter {
             $manualquestions = $this->get_manual_questions($quba, $manualslots);
 
             if (!empty($manualquestions['criteria'])) {
+                $quizdecimalpoints = 2;
+                $quizgradeitem = $this->fetch_grade_item();
+                if ($quizgradeitem && $quizgradeitem->get_decimals() !== null) {
+                    $quizdecimalpoints = (int) $quizgradeitem->get_decimals();
+                }
                 $gradingdefinition = json_encode([
                     'method' => 'quizmanual',
                     'name' => get_string('manualquestions', 'local_unifiedgrader'),
                     'criteria' => $manualquestions['criteria'],
+                    'decimalpoints' => $quizdecimalpoints,
                 ]);
                 $rubricdata = json_encode([
                     'criteria' => $manualquestions['fill'],

@@ -1743,11 +1743,22 @@ class assign_adapter extends base_adapter {
 
         $method = get_grading_manager($this->context, 'mod_assign', 'submissions')->get_active_method();
 
+        // Surface the gradebook's display precision for this grade item so
+        // the marking-panel UI can use it to round the running rubric/guide
+        // total. Falls back to the course default when no grade item exists
+        // yet, then to Moodle's site-wide default of 2 decimal places.
+        $decimalpoints = 2;
+        $gradeitem = $this->fetch_grade_item();
+        if ($gradeitem && $gradeitem->get_decimals() !== null) {
+            $decimalpoints = (int) $gradeitem->get_decimals();
+        }
+
         $result = [
             'id' => (int) $definition->id,
             'method' => $method,
             'name' => $definition->name ?? '',
             'description' => $definition->description ?? '',
+            'decimalpoints' => $decimalpoints,
         ];
 
         if ($method === 'rubric' && !empty($definition->rubric_criteria)) {
