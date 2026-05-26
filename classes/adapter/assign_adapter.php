@@ -319,6 +319,7 @@ class assign_adapter extends base_adapter {
                 'onlinetext' => '',
                 'timecreated' => 0,
                 'timemodified' => 0,
+                'submittedat' => 0,
                 'attemptnumber' => 0,
                 'commentcount' => 0,
                 'locked' => $locked,
@@ -370,6 +371,13 @@ class assign_adapter extends base_adapter {
             'onlinetext' => $onlinetext,
             'timecreated' => (int) $submission->timecreated,
             'timemodified' => (int) $submission->timemodified,
+            // Canonical "when was this submitted, for lateness purposes"
+            // field — matches what get_participants uses for the islate
+            // flag (timemodified, i.e. the final submit, not the draft
+            // start). The marking-panel JS reads this so its late badge
+            // and penalty indicator stay in sync with the student-list
+            // red dot.
+            'submittedat' => (int) $submission->timemodified,
             'attemptnumber' => (int) $submission->attemptnumber,
             'commentcount' => $commentcount,
             'locked' => $locked,
@@ -492,7 +500,13 @@ class assign_adapter extends base_adapter {
         if ($grade && isset($grade->penalty) && $grade->penalty > 0 && $grade->grade > 0) {
             $effectiveduedate = $this->get_effective_duedate($userid);
             $submission = $this->get_submission($userid);
-            $submittedat = $submission ? (int) $submission->timecreated : 0;
+            // Use timemodified (final submit) for the lateness comparison,
+            // not timecreated (draft start). A student who started a draft
+            // before the deadline but submitted after is "late" and should
+            // see the penalty reflected in the grade card. Matches the
+            // semantic used by get_participants() for the student-list
+            // red dot and by build_submission_data()'s submittedat field.
+            $submittedat = $submission ? (int) $submission->timemodified : 0;
 
             // Only report the penalty if the submission is actually late.
             $stilllate = $effectiveduedate > 0 && $submittedat > 0 && $submittedat > $effectiveduedate;

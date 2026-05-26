@@ -101,6 +101,17 @@ export default class extends BaseComponent {
         // navigation boundaries (initial render, student switch). Every other
         // re-render keeps the DOM as the teacher last edited it.
         this._lastRenderedUserid = undefined;
+        // Switching attempts is also a navigation boundary — same student,
+        // but a different attempt's grade / feedback / rubric needs to
+        // replace what's currently in the form. Track this alongside
+        // _lastRenderedUserid so the override-lock gating treats attempt
+        // changes as "fresh" too. Without this, after the user picks a
+        // different attempt the WS returns new data and Object.assigns it
+        // into state.grade, but _renderGrade sees the same userid as before
+        // and skips the form-input write — so the panel stays on the old
+        // attempt's values until the teacher navigates to a different
+        // student and back.
+        this._lastRenderedAttempt = undefined;
         // Set to true the moment the teacher types into the top-level grade
         // input. While this is true, _updateGuideTotal will not overwrite
         // gradeInput.value with the rubric-computed total — manual overrides
@@ -537,10 +548,17 @@ export default class extends BaseComponent {
         // displays (penalty badges, percentage, late indicator) update freely.
         const renderedUserid = this._lastRenderedUserid;
         const currentUserid = state.currentUser?.id;
-        const isFreshRender = renderedUserid === undefined || renderedUserid !== currentUserid;
+        const currentAttempt = state.submission?.attemptnumber ?? null;
+        const renderedAttempt = this._lastRenderedAttempt;
+        const isFreshRender = renderedUserid === undefined
+            || renderedUserid !== currentUserid
+            || renderedAttempt !== currentAttempt;
         this._lastRenderedUserid = currentUserid;
-        // New student → grade input is no longer "manually overridden";
-        // rubric edits should resume auto-syncing the displayed total.
+        this._lastRenderedAttempt = currentAttempt;
+        // New student OR different attempt of the same student → grade input
+        // is no longer "manually overridden"; the saved grade/rubric for
+        // this attempt should drive the display, and rubric edits should
+        // resume auto-syncing the displayed total.
         if (isFreshRender) {
             this._gradeManuallyOverridden = false;
         }
@@ -1306,8 +1324,13 @@ export default class extends BaseComponent {
 
         // If the submission is no longer late (e.g. extension granted after submission),
         // suppress the penalty badge even if assign_grades.penalty is still set.
+        // Use the canonical submittedat so this matches what the late
+        // indicator badge above and the server-side islate flag agree on.
         const duedate = state.submission?.effectiveduedate || state.activity?.duedate || 0;
-        const submitted = state.submission?.timecreated || state.submission?.timemodified || 0;
+        const submitted = state.submission?.submittedat
+            || state.submission?.timemodified
+            || state.submission?.timecreated
+            || 0;
         if (duedate && submitted && submitted <= duedate) {
             return 0;
         }
@@ -2466,9 +2489,15 @@ export default class extends BaseComponent {
 
         // Use the per-user effective due date, falling back to the global activity due date.
         const duedate = state.submission.effectiveduedate || state.activity.duedate || 0;
-        // Use timecreated (first submission / first post) for lateness — a student who
-        // submitted on time but later modified or added follow-up posts is NOT late.
-        const submitted = state.submission.timecreated || state.submission.timemodified || 0;
+        // Use the canonical submittedat the adapter chose for this activity
+        // type — assign = final submit, forum = first post, quiz = attempt
+        // finish, bbb = n/a. The fallbacks preserve behaviour for older
+        // server builds that don't surface the field yet, but on a current
+        // server submittedat is always present.
+        const submitted = state.submission.submittedat
+            || state.submission.timemodified
+            || state.submission.timecreated
+            || 0;
 
         if (!duedate || !submitted || submitted <= duedate) {
             indicator.classList.add('d-none');

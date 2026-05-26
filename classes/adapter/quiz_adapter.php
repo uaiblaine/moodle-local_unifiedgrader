@@ -341,6 +341,7 @@ class quiz_adapter extends base_adapter {
         $slots = $this->get_display_order_slots($attempt, $quba);
         $content = $this->render_attempt_as_html($quba, $slots, $attempt);
 
+        $timefinish = (int) ($attempt->timefinish ?: $attempt->timemodified);
         return [
             'userid' => $userid,
             'status' => 'submitted',
@@ -349,7 +350,11 @@ class quiz_adapter extends base_adapter {
             'files' => $this->get_submission_files_for_attempt($attempt),
             'onlinetext' => '',
             'timecreated' => (int) $attempt->timestart,
-            'timemodified' => (int) ($attempt->timefinish ?: $attempt->timemodified),
+            'timemodified' => $timefinish,
+            // For quizzes, "submitted at" is the attempt's timefinish —
+            // when the student submitted the attempt. Matches the
+            // islate logic for the student-list red dot.
+            'submittedat' => $timefinish,
             'attemptnumber' => (int) $attempt->attempt,
             'commentcount' => submission_comment_manager::count_comments($this->cm->id, $userid),
         ];
@@ -1638,6 +1643,7 @@ class quiz_adapter extends base_adapter {
             'onlinetext' => '',
             'timecreated' => 0,
             'timemodified' => 0,
+            'submittedat' => 0,
             'attemptnumber' => 0,
             'locked' => false,
             'commentcount' => submission_comment_manager::count_comments($this->cm->id, $userid),

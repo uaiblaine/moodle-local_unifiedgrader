@@ -359,6 +359,11 @@ class bbb_adapter extends base_adapter {
             'onlinetext' => '',
             'timecreated' => 0,
             'timemodified' => 0,
+            // BBB doesn't have a per-user "submitted at" concept the way
+            // assignments / forums / quizzes do — attendance is a stream
+            // of events, not a discrete submission. Surface 0 so the
+            // marking-panel late badge stays hidden for BBB regardless.
+            'submittedat' => 0,
             'attemptnumber' => 0,
             'commentcount' => submission_comment_manager::count_comments($this->cm->id, $userid),
         ];

@@ -125,6 +125,12 @@ class get_submission_data extends external_api {
             'onlinetext' => new external_value(PARAM_RAW, 'Online text submission'),
             'timecreated' => new external_value(PARAM_INT, 'Time created'),
             'timemodified' => new external_value(PARAM_INT, 'Time modified'),
+            'submittedat' => new external_value(
+                PARAM_INT,
+                'Canonical "submitted at" timestamp for lateness comparisons (per-adapter semantics).',
+                VALUE_DEFAULT,
+                0,
+            ),
             'attemptnumber' => new external_value(PARAM_INT, 'Attempt number'),
             'commentcount' => new external_value(PARAM_INT, 'Number of submission comments', VALUE_DEFAULT, 0),
             'locked' => new external_value(PARAM_BOOL, 'Whether submission changes are locked', VALUE_DEFAULT, false),

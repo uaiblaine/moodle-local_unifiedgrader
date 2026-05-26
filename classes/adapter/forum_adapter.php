@@ -326,6 +326,11 @@ class forum_adapter extends base_adapter {
             'onlinetext' => '',
             'timecreated' => $timecreated,
             'timemodified' => $timemodified,
+            // For forums, "submitted at" is the first-post timestamp —
+            // a student who posted on time but added follow-up posts
+            // after the due date is NOT late. Matches the islate logic
+            // in get_participants.
+            'submittedat' => $timecreated,
             'attemptnumber' => 0,
             'commentcount' => submission_comment_manager::count_comments($this->cm->id, $userid),
         ];
@@ -909,6 +914,7 @@ class forum_adapter extends base_adapter {
             'onlinetext' => '',
             'timecreated' => 0,
             'timemodified' => 0,
+            'submittedat' => 0,
             'attemptnumber' => 0,
             'locked' => false,
             'commentcount' => submission_comment_manager::count_comments($this->cm->id, $userid),
