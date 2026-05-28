@@ -59,6 +59,11 @@ class get_activity_info extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $adapter = adapter_factory::create($cmid);
         return $adapter->get_activity_info();
     }

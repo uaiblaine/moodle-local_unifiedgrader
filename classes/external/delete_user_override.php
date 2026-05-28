@@ -67,6 +67,11 @@ class delete_user_override extends external_api {
         $overridecap = 'mod/' . $cm->modname . ':manageoverrides';
         require_capability($overridecap, $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $adapter = adapter_factory::create($params['cmid']);
         $result = $adapter->delete_user_override($params['userid']);
 

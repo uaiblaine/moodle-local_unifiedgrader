@@ -64,6 +64,11 @@ class get_penalties extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // Auto-sync late penalty for forums before returning penalties.
         $cm = get_coursemodule_from_id('', $params['cmid'], 0, false, MUST_EXIST);
         if ($cm->modname === 'forum') {

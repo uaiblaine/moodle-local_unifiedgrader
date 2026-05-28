@@ -66,6 +66,11 @@ class get_annotations extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         return annotation_manager::get_annotations(
             $params['cmid'],
             $params['userid'],

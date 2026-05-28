@@ -61,6 +61,11 @@ class get_shared_library extends external_api {
         $context = \context_system::instance();
         self::validate_context($context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // All teachers can view shared comments. Only return empty if guest.
         if (isguestuser()) {
             return [];

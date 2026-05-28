@@ -64,6 +64,11 @@ class get_library_comments extends external_api {
         $context = \context_system::instance();
         self::validate_context($context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         return comment_library_manager::get_comments($USER->id, $params['coursecode'], $params['tagid']);
     }
 

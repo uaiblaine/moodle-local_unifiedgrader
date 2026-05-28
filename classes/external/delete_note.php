@@ -62,6 +62,11 @@ class delete_note extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:managenotes', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         notes_manager::delete_note($params['noteid']);
 
         return ['success' => true];

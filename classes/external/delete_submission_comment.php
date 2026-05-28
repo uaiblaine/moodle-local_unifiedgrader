@@ -70,6 +70,11 @@ class delete_submission_comment extends external_api {
             require_capability('local/unifiedgrader:grade', $context);
         }
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // Load the comment record.
         $record = submission_comment_manager::get_comment($params['commentid']);
         if (!$record) {

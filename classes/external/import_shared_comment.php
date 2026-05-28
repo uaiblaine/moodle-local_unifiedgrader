@@ -64,6 +64,11 @@ class import_shared_comment extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:sharecomments', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $newid = comment_library_manager::import_shared_comment(
             $params['commentid'],
             $USER->id,

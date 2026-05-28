@@ -65,6 +65,11 @@ class delete_forum_extension extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $DB->delete_records('local_unifiedgrader_fext', [
             'cmid' => $params['cmid'],
             'userid' => $params['userid'],

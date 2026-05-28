@@ -63,6 +63,11 @@ class get_notes extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:viewnotes', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         return notes_manager::get_notes($params['cmid'], $params['userid']);
     }
 

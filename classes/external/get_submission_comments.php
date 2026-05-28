@@ -75,6 +75,11 @@ class get_submission_comments extends external_api {
             throw new \moodle_exception('nopermission', 'local_unifiedgrader');
         }
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $comments = submission_comment_manager::get_comments($params['cmid'], $params['userid']);
 
         // Ensure PAGE has a context set for user_picture rendering.

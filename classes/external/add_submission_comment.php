@@ -77,6 +77,11 @@ class add_submission_comment extends external_api {
         if (!$hasgrade && (int) $params['userid'] !== (int) $USER->id) {
             throw new \moodle_exception('nopermission', 'local_unifiedgrader');
         }
+
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
         // News / announcements forums are not graded; submission comments
         // do not apply. Refuse defensively in case the JS widget slipped
         // through the hook-callback guard (stale cache, etc).

@@ -84,6 +84,11 @@ class save_penalty extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // Validate category.
         if (!in_array($params['category'], ['wordcount', 'other'])) {
             throw new \invalid_parameter_exception('Invalid penalty category: ' . $params['category']);

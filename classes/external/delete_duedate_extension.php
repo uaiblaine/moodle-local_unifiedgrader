@@ -66,6 +66,11 @@ class delete_duedate_extension extends external_api {
         require_capability('local/unifiedgrader:grade', $context);
         require_capability('quizaccess/duedate:manageoverrides', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $adapter = adapter_factory::create($params['cmid']);
         $adapter->delete_duedate_extension($params['userid']);
 

@@ -63,6 +63,11 @@ class save_library_tag extends external_api {
         $context = \context_system::instance();
         self::validate_context($context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         $id = comment_library_manager::save_tag($USER->id, $params['name'], $params['tagid']);
 
         return ['tagid' => $id];

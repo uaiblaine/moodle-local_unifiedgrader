@@ -70,6 +70,11 @@ class get_student_annotations extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:viewfeedback', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // Force userid to the current user — students can only see their own annotations.
         $userid = (int) $USER->id;
 

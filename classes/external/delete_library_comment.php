@@ -59,6 +59,11 @@ class delete_library_comment extends external_api {
 
         $context = \context_system::instance();
         self::validate_context($context);
+
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
         if (isguestuser()) {
             throw new \moodle_exception('noguest');
         }

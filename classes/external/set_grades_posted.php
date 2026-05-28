@@ -70,6 +70,11 @@ class set_grades_posted extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
         // Block quiz grade posting unless the admin setting is enabled.
         $cm = get_coursemodule_from_id('', $params['cmid'], 0, false, MUST_EXIST);
         if ($cm->modname === 'quiz' && empty(get_config('local_unifiedgrader', 'enable_quiz_post_grades'))) {

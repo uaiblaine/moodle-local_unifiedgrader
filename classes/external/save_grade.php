@@ -114,6 +114,19 @@ class save_grade extends external_api {
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
 
+        // Release the PHP session lock so concurrent AJAX from the same
+        // teacher does not serialize behind this request. This handler
+        // does not write to $SESSION.
+        \core\session\manager::write_close();
+
+        // Track wall-clock time so we can flag genuinely slow saves to admins.
+        // A grade-save dragging into the multi-second range typically means
+        // gradebook recompute is the bottleneck (large course / many graded
+        // items) or a DB lock contention. Surfacing it via debugging() lets
+        // an admin running with developer debug on spot the issue without
+        // adding noise to normal operation.
+        $starttime = microtime(true);
+
         $adapter = adapter_factory::create($params['cmid']);
 
         // Deliberate reset short-circuits the normal save flow: clear the
@@ -203,6 +216,26 @@ class save_grade extends external_api {
         }
         if (($activityinfo['type'] ?? '') === 'forum') {
             $adapter->sync_gradebook_penalty($params['userid']);
+        }
+
+        // Five seconds is the threshold: anything under it is normal noise;
+        // above it suggests a real bottleneck (large gradebook, slow DB,
+        // misbehaving plugin observer). The PHP session lock timeout is
+        // typically two minutes, so logging at five seconds gives plenty of
+        // warning before contention becomes user-visible.
+        $elapsed = microtime(true) - $starttime;
+        if ($elapsed > 5.0) {
+            debugging(sprintf(
+                'local_unifiedgrader_save_grade for cmid=%d user=%d took %.2fs '
+                    . '(adapter=%s, advanced=%s, draftitemid=%d, files=%d)',
+                $params['cmid'],
+                $params['userid'],
+                $elapsed,
+                $activityinfo['type'] ?? 'unknown',
+                empty($advanceddata) ? 'no' : 'yes',
+                $params['draftitemid'],
+                $params['feedbackfilesdraftid'],
+            ), DEBUG_DEVELOPER);
         }
 
         return ['success' => $success];
