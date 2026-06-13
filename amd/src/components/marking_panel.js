@@ -65,6 +65,7 @@ export default class extends BaseComponent {
             RUBRIC_BODY: '[data-region="rubric-body"]',
             PLAGIARISM_SECTION: '[data-region="plagiarism-section"]',
             PLAGIARISM_BODY: '[data-region="plagiarism-body"]',
+            PLAGIARISM_ACTIONS: '[data-region="plagiarism-actions"]',
             FEEDBACK_DISPLAY: '[data-region="feedback-display"]',
             FEEDBACK_DISPLAY_CONTENT: '[data-region="feedback-display-content"]',
             FEEDBACK_EDITOR_WRAPPER: '[data-region="feedback-editor-wrapper"]',
@@ -82,6 +83,7 @@ export default class extends BaseComponent {
             REFERRAL_FORM: '[data-region="referral-form"]',
             REFERRAL_STATUS: '[data-region="referral-status"]',
             REFER_BTN: '[data-action="refer-integrity"]',
+            REFER_LABEL: '[data-region="refer-label"]',
             REFERRAL_NOTE: '[data-action="referral-note"]',
             REFERRAL_CONFIRM: '[data-action="referral-confirm"]',
             REFERRAL_CANCEL: '[data-action="referral-cancel"]',
@@ -138,8 +140,22 @@ export default class extends BaseComponent {
         this._suppressAutoSave = false;
         this._saveInFlight = false;
         this._reportButtonLabel = 'Report academic impropriety';
+        // Default label for the standalone grade-pane referral button; captured
+        // from the rendered span on init, with this English fallback for safety.
+        this._referLabel = 'Refer for integrity review';
+        // Confirm prompt for the combined plagiarism-pane button. Pre-fetched so
+        // the click handler can stay fully synchronous — window.open() for the
+        // report form must run inside the user gesture or the pop-up is blocked.
+        this._referConfirmMsg = 'Flag this submission for an academic-integrity review and open the report form?';
+        // Where the referral control currently lives: 'grade' (its template
+        // home) or 'plagiarism' (relocated into the plagiarism card).
+        this._referralHosted = 'grade';
+        this._referralHomeParent = null;
         getString('report_impropriety', 'local_unifiedgrader').then(str => {
             this._reportButtonLabel = str;
+        }).catch(() => {});
+        getString('refer_report_confirm', 'local_unifiedgrader').then(str => {
+            this._referConfirmMsg = str;
         }).catch(() => {});
     }
 
@@ -1296,9 +1312,35 @@ export default class extends BaseComponent {
         const cancelBtn = this.getElement(this.selectors.REFERRAL_CANCEL);
         const resolveBtn = this.getElement(this.selectors.REFERRAL_RESOLVE);
 
+        // Remember the grade-pane home so the control can be moved back when a
+        // student has no plagiarism links (or the report form is disabled), and
+        // capture the standalone button label for the same case. Guard the
+        // capture so it records the true home even if _renderPlagiarism has
+        // already relocated the node into the plagiarism actions host.
+        const actions = this.getElement(this.selectors.PLAGIARISM_ACTIONS);
+        if (!this._referralHomeParent && (!actions || section.parentNode !== actions)) {
+            this._referralHomeParent = section.parentNode;
+        }
+        const labelEl = this.getElement(this.selectors.REFER_LABEL);
+        if (labelEl) {
+            this._referLabel = labelEl.textContent;
+        }
+
         if (referBtn && form) {
             referBtn.addEventListener('click', (e) => {
                 e.preventDefault();
+                // In the plagiarism pane, when a report form is configured, this
+                // is the single combined button: one click flags the submission
+                // AND opens the report form, guarded by a confirm so an
+                // accidental click can be cancelled. Without a report form (or in
+                // its grade-pane home) it keeps the inline note → confirm flow so
+                // a reason can still be recorded.
+                const st = this.reactive.state;
+                const formEnabled = !!(st.ui.enableReportForm && st.ui.reportFormUrl);
+                if (this._referralHosted === 'plagiarism' && formEnabled) {
+                    this._handleCombinedReferral();
+                    return;
+                }
                 form.classList.remove('d-none');
                 referBtn.classList.add('d-none');
                 if (noteInput) {
@@ -1390,6 +1432,109 @@ export default class extends BaseComponent {
                 status.classList.add('d-none');
             }
         }
+    }
+
+    /**
+     * Combined academic-integrity action, used when the referral control is
+     * hosted in the plagiarism pane: a single click flags the submission for
+     * review (pausing the turnaround clock) AND opens the prefilled report
+     * form. A confirm() guards against an accidental click so the teacher can
+     * cancel before anything happens.
+     *
+     * Kept fully synchronous (the confirm string is pre-fetched in create())
+     * so the window.open() for the report form runs inside the click gesture
+     * and is not treated as a blocked pop-up.
+     */
+    _handleCombinedReferral() {
+        if (!window.confirm(this._referConfirmMsg)) {
+            return;
+        }
+        const state = this.reactive.state;
+        // Flag for review. No inline note here — the report form captures the
+        // case details, and the open-referral status still offers "Mark
+        // resolved" as a follow-up undo.
+        this.reactive.dispatch('refer', state.activity.cmid, state.currentUser.id, '');
+        if (state.ui.enableReportForm && state.ui.reportFormUrl) {
+            window.open(this._buildReportUrl(state), '_blank', 'noopener');
+        }
+    }
+
+    /**
+     * Move the academic-integrity referral control between its grade-pane home
+     * and the plagiarism pane.
+     *
+     * When a submission has plagiarism links and the report form is enabled, a
+     * single combined button is surfaced inside the plagiarism card so the
+     * teacher sees one button (not a separate "report" link plus a "refer"
+     * button). Otherwise the control lives in the grade pane with its
+     * inline-note flow.
+     *
+     * The same DOM node is relocated (not re-created), so its wired listeners
+     * and open/resolve lifecycle keep working in either location.
+     *
+     * @param {string} host Either 'plagiarism' or 'grade'.
+     */
+    _setReferralHost(host) {
+        const section = this.getElement(this.selectors.REFERRAL_SECTION);
+        if (!section) {
+            // No refer capability — there is no control to relocate.
+            return;
+        }
+        const actions = this.getElement(this.selectors.PLAGIARISM_ACTIONS);
+        // Capture the original grade-pane parent the first time, before any move.
+        if (!this._referralHomeParent && (!actions || section.parentNode !== actions)) {
+            this._referralHomeParent = section.parentNode;
+        }
+        const labelEl = this.getElement(this.selectors.REFER_LABEL);
+        const referBtn = this.getElement(this.selectors.REFER_BTN);
+
+        if (host === 'plagiarism' && actions) {
+            if (section.parentNode !== actions) {
+                actions.appendChild(section);
+            }
+            this._referralHosted = 'plagiarism';
+            // "Report academic impropriety" when a report form will open on
+            // click; plain "Refer for integrity review" when there is no form
+            // (the button only flags, via the inline-note flow).
+            if (labelEl) {
+                const st = this.reactive.state;
+                const formEnabled = !!(st.ui.enableReportForm && st.ui.reportFormUrl);
+                labelEl.textContent = formEnabled ? this._reportButtonLabel : this._referLabel;
+            }
+            // Full width to match the plagiarism card's report-button styling.
+            if (referBtn) {
+                referBtn.classList.add('w-100');
+            }
+        } else {
+            if (this._referralHomeParent && section.parentNode !== this._referralHomeParent) {
+                this._referralHomeParent.appendChild(section);
+            }
+            this._referralHosted = 'grade';
+            if (labelEl) {
+                labelEl.textContent = this._referLabel;
+            }
+            if (referBtn) {
+                referBtn.classList.remove('w-100');
+            }
+        }
+    }
+
+    /**
+     * Build the plain "report academic impropriety" link shown in the
+     * plagiarism pane for teachers who can open the report form but lack the
+     * refer capability (so they still get the form, just not the flag).
+     *
+     * @param {object} state Current reactive state.
+     * @return {string} HTML for the report link.
+     */
+    _buildReportLinkHtml(state) {
+        const reportUrl = this._buildReportUrl(state);
+        return '<div class="mt-2 pt-2 border-top">'
+            + '<a href="' + this._escapeHtml(reportUrl) + '" target="_blank" rel="noopener"'
+            + ' class="btn btn-sm btn-outline-danger w-100">'
+            + '<i class="fa fa-flag me-1"></i>'
+            + this._escapeHtml(this._reportButtonLabel)
+            + '</a></div>';
     }
 
     /**
@@ -2838,6 +2983,7 @@ export default class extends BaseComponent {
         if (!section || !body) {
             return;
         }
+        const actions = this.getElement(this.selectors.PLAGIARISM_ACTIONS);
 
         // Post-body plagiarism shields for forums are rendered inline in
         // the preview panel, but per-attachment shields aren't — so the
@@ -2847,8 +2993,15 @@ export default class extends BaseComponent {
         const links = state.submission.plagiarismlinks || [];
 
         if (links.length === 0) {
+            // No plagiarism pane for this submission — re-home the referral
+            // control in the grade pane before clearing the actions host (so the
+            // referenced section node is not briefly orphaned).
             section.classList.add('d-none');
             body.innerHTML = '';
+            this._setReferralHost('grade');
+            if (actions) {
+                actions.innerHTML = '';
+            }
             return;
         }
 
@@ -2860,20 +3013,33 @@ export default class extends BaseComponent {
             html += '</div>';
         }
         html += '</div>';
+        body.innerHTML = html;
 
-        // Academic impropriety report button.
-        if (state.ui.enableReportForm && state.ui.reportFormUrl) {
-            const reportUrl = this._buildReportUrl(state);
-            html += '<div class="mt-2 pt-2 border-top">';
-            html += '<a href="' + this._escapeHtml(reportUrl) + '" target="_blank" rel="noopener"'
-                + ' class="btn btn-sm btn-outline-danger w-100">';
-            html += '<i class="fa fa-flag me-1"></i>';
-            html += this._escapeHtml(this._reportButtonLabel);
-            html += '</a>';
-            html += '</div>';
+        // Academic-integrity action below the file shields. The action belongs
+        // with the plagiarism report, so whenever this card is shown it hosts the
+        // control (it only falls back to the grade card when there is no
+        // plagiarism card — the links.length === 0 path above):
+        //  - Can refer → relocate the referral control here (same node, so the
+        //    grade card no longer shows it). With a report form configured it is
+        //    the single combined button (one click flags AND opens the form);
+        //    without one it flags via the inline-note flow.
+        //  - Cannot refer but report form enabled → plain report link (form only),
+        //    preserving the prior behaviour for non-referrers.
+        //  - Cannot refer and no report form → nothing to show here.
+        const formEnabled = !!(state.ui.enableReportForm && state.ui.reportFormUrl);
+        const canRefer = !!state.ui.canrefer;
+        if (actions) {
+            if (canRefer) {
+                this._setReferralHost('plagiarism');
+            } else if (formEnabled) {
+                this._setReferralHost('grade');
+                actions.innerHTML = this._buildReportLinkHtml(state);
+            } else {
+                this._setReferralHost('grade');
+                actions.innerHTML = '';
+            }
         }
 
-        body.innerHTML = html;
         section.classList.remove('d-none');
     }
 

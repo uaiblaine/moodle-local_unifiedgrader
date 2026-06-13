@@ -468,6 +468,7 @@ $string['refer_integrity_help'] = 'Flag this submission for an academic-integrit
 $string['refer_note_placeholder'] = 'Optional note (visible to reviewers)';
 $string['refer_confirm'] = 'Refer';
 $string['refer_cancel'] = 'Cancel';
+$string['refer_report_confirm'] = 'Flag this submission for an academic-integrity review (this pauses the grading-turnaround metric) and open the report form?';
 $string['referral_open'] = 'Referred for integrity review';
 $string['referral_resolved'] = 'Integrity referral resolved';
 $string['referral_resolve'] = 'Mark resolved';

@@ -47,7 +47,16 @@
                 {{#str}} plagiarism, local_unifiedgrader {{/str}}
             </h6>
         </div>
-        <div class="card-body py-2" data-region="plagiarism-body"></div>
+        <div class="card-body py-2">
+            {{! File-shield links (innerHTML-managed by JS). }}
+            <div data-region="plagiarism-body"></div>
+            {{! Stable host for the academic-integrity action: JS relocates the
+                referral control here (single combined "Report academic
+                impropriety" button that flags AND opens the report form), or
+                renders a plain report link for teachers who lack the refer
+                capability. Never overwritten by the plagiarism-body innerHTML. }}
+            <div data-region="plagiarism-actions"></div>
+        </div>
     </div>
 
     {{! Mark-as-graded toggle (shown by JS when grading is disabled, e.g. grade type "None") }}
@@ -156,7 +165,7 @@
                         data-action="refer-integrity"
                         title="{{#str}} refer_integrity_help, local_unifiedgrader {{/str}}">
                     <i class="fa fa-flag me-1" aria-hidden="true"></i>
-                    {{#str}} refer_integrity, local_unifiedgrader {{/str}}
+                    <span data-region="refer-label">{{#str}} refer_integrity, local_unifiedgrader {{/str}}</span>
                 </button>
 
                 {{! Inline note input (toggled by JS) }}

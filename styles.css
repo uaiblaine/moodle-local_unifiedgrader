@@ -364,10 +364,17 @@
     display: none !important;
 }
 
-/* Responsive media in marking panel (teacher grading view). */
+/* Responsive media in marking panel (teacher grading view).
+   The iframe selector deliberately excludes the TinyMCE editing surface
+   (.tox-edit-area__iframe): that iframe is absolutely positioned and relies on
+   TinyMCE's own height:100% to fill its resizable edit area. Our height:auto
+   here outranks that rule (specificity 0,2,1 vs 0,2,0), collapsing the iframe to
+   the intrinsic ~150px default — so dragging the resize handle grew the box but
+   the visible text stayed clipped. Embedded media iframes (e.g. videos in saved
+   feedback) still get the responsive treatment. */
 .local-unifiedgrader-container [data-region="marking-panel"] video,
 .local-unifiedgrader-container [data-region="marking-panel"] img,
-.local-unifiedgrader-container [data-region="marking-panel"] iframe {
+.local-unifiedgrader-container [data-region="marking-panel"] iframe:not(.tox-edit-area__iframe) {
     max-width: 100%;
     height: auto;
 }
