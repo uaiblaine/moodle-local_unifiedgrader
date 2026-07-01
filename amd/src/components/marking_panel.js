@@ -2392,7 +2392,10 @@ export default class extends BaseComponent {
             }
             return true;
         }
-        const num = parseFloat(raw);
+        // Number() (not parseFloat) so a partly-numeric value like "5abc" is
+        // rejected rather than leniently parsed to 5 — otherwise the raw string
+        // round-trips to the server and hits a numeric DB column.
+        const num = Number(raw);
         if (isNaN(num) || num < 0 || num > maxscore) {
             scoreInput.classList.add('is-invalid');
             if (errorEl) {

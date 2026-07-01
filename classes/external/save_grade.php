@@ -196,6 +196,12 @@ class save_grade extends external_api {
         $advanceddata = [];
         if (!empty($params['advancedgradingdata'])) {
             $advanceddata = json_decode($params['advancedgradingdata'], true) ?: [];
+            // Reject non-numeric criterion scores before they reach Moodle's
+            // grading form, which writes them straight into a NUMBER column and
+            // raises an opaque dml_write_exception. A teacher who accidentally
+            // types an alphanumeric mark (e.g. "5a") gets a clear, localised
+            // error instead of a 500.
+            self::validate_advanced_grading_scores($advanceddata);
         }
 
         $success = $adapter->save_grade(
@@ -249,5 +255,43 @@ class save_grade extends external_api {
         return new external_single_structure([
             'success' => new external_value(PARAM_BOOL, 'Whether the grade was saved successfully'),
         ]);
+    }
+
+    /**
+     * Reject non-numeric criterion scores in advanced grading data before they
+     * reach Moodle's grading form, which stores them in a numeric column and
+     * throws an opaque dml_write_exception. Rubrics carry a level id rather than
+     * a free-text score, so only the marking-guide `score` and quiz-manual
+     * `mark` fields are validated. Empty values are allowed (an ungraded
+     * criterion). Decimals must use a period — the client canonicalises comma
+     * separators before sending.
+     *
+     * @param array $advanceddata Decoded advanced grading data.
+     * @throws \moodle_exception When a score/mark is present but not numeric.
+     */
+    private static function validate_advanced_grading_scores(array $advanceddata): void {
+        $rows = [];
+        if (!empty($advanceddata['criteria']) && is_array($advanceddata['criteria'])) {
+            $rows = $advanceddata['criteria'];
+        } else if (!empty($advanceddata['questions']) && is_array($advanceddata['questions'])) {
+            $rows = $advanceddata['questions'];
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            foreach (['score', 'mark'] as $key) {
+                if (!array_key_exists($key, $row)) {
+                    continue;
+                }
+                $value = $row[$key];
+                if ($value === '' || $value === null) {
+                    continue;
+                }
+                if (!is_numeric($value)) {
+                    throw new \moodle_exception('error_criterion_score_not_numeric', 'local_unifiedgrader');
+                }
+            }
+        }
     }
 }

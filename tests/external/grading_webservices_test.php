@@ -107,6 +107,32 @@ final class grading_webservices_test extends \advanced_testcase {
     }
 
     /**
+     * A non-numeric marking-guide criterion score must be rejected with a clean,
+     * localised error rather than reaching Moodle's grading form and raising an
+     * opaque dml_write_exception. Regression guard for the field-reported crash
+     * when a teacher accidentally typed an alphanumeric mark (e.g. "5a").
+     */
+    public function test_save_grade_rejects_non_numeric_criterion_score(): void {
+        $this->resetAfterTest();
+
+        $scenario = $this->create_scenario();
+
+        try {
+            save_grade::execute(
+                $scenario->cm->id,
+                $scenario->students[0]->id,
+                -1.0,
+                '',
+                FORMAT_HTML,
+                '{"criteria":{"1":{"score":"5abc","remark":""}}}',
+            );
+            $this->fail('Expected a moodle_exception for the non-numeric criterion score.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('error_criterion_score_not_numeric', $e->errorcode);
+        }
+    }
+
+    /**
      * Test save_grade return value passes clean_returnvalue validation.
      */
     public function test_save_grade_return_validation(): void {
