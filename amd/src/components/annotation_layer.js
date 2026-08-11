@@ -1338,7 +1338,7 @@ export default class AnnotationLayer {
         // "All" chip.
         const allChip = document.createElement('span');
         allChip.className = activeTagId === 0
-            ? 'badge bg-primary' : 'badge bg-light text-dark border';
+            ? 'badge bg-primary text-white' : 'badge bg-light text-dark border';
         allChip.style.cursor = 'pointer';
         allChip.style.fontSize = '0.7rem';
         allChip.textContent = (this._strings?.clib_all || 'All');

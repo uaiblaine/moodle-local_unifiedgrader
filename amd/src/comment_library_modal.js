@@ -444,7 +444,7 @@ const _courseItem = (label, code, count) => {
     labelSpan.textContent = label;
 
     const badge = document.createElement('span');
-    badge.className = 'badge bg-secondary rounded-pill';
+    badge.className = 'badge bg-secondary rounded-pill text-dark';
     badge.textContent = count;
 
     item.appendChild(labelSpan);
@@ -584,7 +584,7 @@ const _commentCard = (comment) => {
         metaRow.appendChild(codeBadge);
     } else {
         const universalBadge = document.createElement('span');
-        universalBadge.className = 'badge bg-info';
+        universalBadge.className = 'badge bg-info text-white';
         universalBadge.style.fontSize = '0.65rem';
         universalBadge.title = 'Universal';
         universalBadge.innerHTML = '<i class="fa fa-globe me-1"></i>Universal';
@@ -612,7 +612,7 @@ const _commentCard = (comment) => {
 
     if (comment.shared) {
         const sharedBadge = document.createElement('span');
-        sharedBadge.className = 'badge bg-success';
+        sharedBadge.className = 'badge bg-success text-white';
         sharedBadge.style.fontSize = '0.65rem';
         sharedBadge.textContent = 'Shared';
         getString('clib_share', 'local_unifiedgrader').then((s) => {
@@ -627,7 +627,7 @@ const _commentCard = (comment) => {
     // copy exists as its own card under the System defaults bucket.
     if (comment.proposalstatus === 'pending') {
         const pendingBadge = document.createElement('span');
-        pendingBadge.className = 'badge bg-secondary';
+        pendingBadge.className = 'badge bg-secondary text-dark';
         pendingBadge.style.fontSize = '0.65rem';
         pendingBadge.innerHTML = '<i class="fa fa-hourglass-half me-1"></i>Pending review';
         getString('clib_proposal_pending', 'local_unifiedgrader').then((s) => {
@@ -637,7 +637,7 @@ const _commentCard = (comment) => {
         metaRow.appendChild(pendingBadge);
     } else if (comment.proposalstatus === 'rejected') {
         const rejectedBadge = document.createElement('span');
-        rejectedBadge.className = 'badge bg-danger';
+        rejectedBadge.className = 'badge bg-danger text-white';
         rejectedBadge.style.fontSize = '0.65rem';
         // Tooltip carries the reason if present, so the badge stays small.
         const reason = comment.proposalreason || '';
@@ -1111,7 +1111,7 @@ const _renderShared = () => {
 
         if (comment.ownername) {
             const authorBadge = document.createElement('span');
-            authorBadge.className = 'badge bg-secondary';
+            authorBadge.className = 'badge bg-secondary text-dark';
             authorBadge.style.fontSize = '0.65rem';
             authorBadge.textContent = comment.ownername;
             meta.appendChild(authorBadge);
