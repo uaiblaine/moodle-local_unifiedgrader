@@ -36,7 +36,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3']
+        # Moodle core's composer.json requires php >=8.3, so 8.2 cannot install it.
+        php: ['8.3', '8.4']
         # One entry per branch in version.php $plugin->supported. Keep the two in step:
         # a branch listed there and missing here ships unvalidated.
         moodle-branch: ['MOODLE_500_STABLE', 'MOODLE_501_STABLE', 'MOODLE_502_STABLE']
@@ -83,6 +84,29 @@ jobs:
         if: ${{ !cancelled() }}
         run: moodle-plugin-ci phpcs --max-warnings 0 ./plugin
 
+      - name: Development Leftover Checker
+        if: ${{ !cancelled() }}
+        run: |
+          # Same patterns as the fleet's reusable workflow, with two differences.
+          #
+          # thirdparty/ is skipped: PDF.js ships a development marker inside its
+          # minified bundle and vendored code is never edited. thirdpartylibs.xml
+          # declares pdfjs, fabric and pdflib.
+          #
+          # The patterns are assembled from halves rather than written out, because
+          # a checker that spells its own markers matches itself — the first run of
+          # this step failed on this very file.
+          P1="@test""me"
+          P2="TO""DO"
+          P3="<<<<""<<< HEAD"
+          if grep -rn --exclude-dir=.git --exclude-dir=node_modules \
+               --exclude-dir=vendor --exclude-dir=thirdparty \
+               -e "$P1" -e "$P2" -e "$P3" ./plugin/; then
+            echo 'Development leftovers detected! Please clean up the code.'
+            exit 1
+          fi
+          echo 'No development leftovers found.'
+
       - name: Moodle PHPDoc Checker
         if: ${{ !cancelled() }}
         run: moodle-plugin-ci phpdoc --max-warnings 0 ./plugin
@@ -112,7 +136,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           if [ -d "plugin/tests/behat" ]; then
-            moodle-plugin-ci behat --profile chrome --scss-deprecations ./plugin
+            moodle-plugin-ci behat --profile chrome --scss-deprecations \
+              --tags='@local_unifiedgrader&&~@local_unifiedgrader_wip' ./plugin
           else
             echo "No Behat features found, skipping."
           fi

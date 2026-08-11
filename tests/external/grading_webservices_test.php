@@ -178,6 +178,77 @@ final class grading_webservices_test extends \advanced_testcase {
         $this->assertNull($gradedata['grade']);
     }
 
+    /**
+     * Sending -1 must CLEAR a grade that is already there, not just read back as
+     * "no grade" on a row that never held one.
+     *
+     * This is the light reset the marking panel performs when a teacher types
+     * "-" (or any stray non-numeric value) into the grade box: clear the mark,
+     * leave the feedback and the submission alone. It used to be a silent no-op
+     * for assignments — assign_adapter::save_grade() handed core a null grade and
+     * assign::apply_grade_to_user() guards its write with isset($formdata->grade),
+     * so the previous mark survived, the save still reported success, and the
+     * teacher's cleared grade came back on the next page load.
+     *
+     * test_save_grade_negative_one_means_no_grade above cannot catch that: with no
+     * grade ever saved, assign_grades.grade is already -1 and the assertion holds
+     * whether or not the clear does anything. Hence the seeded grade here, asserted
+     * before the clear so the test cannot pass vacuously.
+     */
+    public function test_save_grade_negative_one_clears_an_existing_grade(): void {
+        global $DB, $CFG;
+        require_once($CFG->libdir . '/gradelib.php');
+        $this->resetAfterTest();
+
+        $scenario = $this->create_scenario_with_submission();
+        $student = $scenario->students[0];
+
+        // Seed a real grade, and prove it landed — without this the clear below
+        // would have nothing to undo.
+        save_grade::execute($scenario->cm->id, $student->id, 85.0, '<p>Great work!</p>');
+        $seeded = get_grade_data::execute($scenario->cm->id, $student->id);
+        $this->assertEquals(85.0, $seeded['grade'], 'Precondition: the grade to be cleared must exist.');
+
+        // The light reset: clear the grade, keep the feedback.
+        $result = save_grade::execute($scenario->cm->id, $student->id, -1, '<p>Great work!</p>');
+        $this->assertTrue($result['success']);
+
+        $after = get_grade_data::execute($scenario->cm->id, $student->id);
+        $this->assertNull($after['grade'], 'Sending -1 must clear the stored grade.');
+        $this->assertStringContainsString(
+            'Great work!',
+            $after['feedback'],
+            'A light reset clears the grade only — the feedback stays.',
+        );
+
+        // The row itself must carry mod_assign's "no grade" sentinel, so the
+        // read-back above cannot be a formatting artefact of a stale 85.
+        $stored = $DB->get_field_sql(
+            "SELECT g.grade
+               FROM {assign_grades} g
+              WHERE g.assignment = :assignment AND g.userid = :userid
+           ORDER BY g.attemptnumber DESC",
+            ['assignment' => $scenario->activity->id, 'userid' => $student->id],
+            IGNORE_MULTIPLE,
+        );
+        $this->assertEquals(-1, (int) $stored);
+
+        // And the gradebook must follow, otherwise the student still sees 85.
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $scenario->activity->id,
+            'itemnumber' => 0,
+            'courseid' => $scenario->course->id,
+        ]);
+        $this->assertNotEmpty($gradeitem);
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id]);
+        $this->assertNull(
+            $gradegrade ? $gradegrade->finalgrade : null,
+            'Clearing the grade must clear the gradebook cell too.',
+        );
+    }
+
     // Set_grades_posted tests.
 
     /**

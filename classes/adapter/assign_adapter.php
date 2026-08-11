@@ -705,7 +705,18 @@ class assign_adapter extends base_adapter {
         }
 
         $data = new \stdClass();
-        $data->grade = $grade;
+        // A null grade is the teacher's "ungrade me" signal (typing "-" in the
+        // panel, which the web service turns into null). It has to be sent as
+        // -1, not null: assign::apply_grade_to_user() guards the write with
+        // `if (isset($formdata->grade))` (mod/assign/locallib.php), and isset()
+        // on a null property is false — so a null silently left the previously
+        // saved mark in place and "clear the grade" was a no-op that still
+        // reported success. -1 is mod_assign's own "no grade" sentinel: it is
+        // what get_user_grade() seeds new rows with, and convert_grade_for_gradebook()
+        // maps it to a NULL gradebook rawgrade. It is also what this plugin
+        // already writes in save_grade_directly() and reset_grade_and_submission(),
+        // so all three paths now agree.
+        $data->grade = $grade ?? -1;
         $data->attemptnumber = $attemptnumber;
         $editordata = [
             'text' => $feedback,

@@ -33,6 +33,8 @@
 
 require_once(__DIR__ . '/../../../../lib/behat/behat_base.php');
 
+use Behat\Mink\Exception\ExpectationException;
+
 /**
  * Unified Grader steps.
  */
@@ -50,7 +52,6 @@ class behat_local_unifiedgrader extends behat_base {
      */
     public function i_am_on_the_unified_grader_for_activity(string $activityname): void {
         global $DB;
-        $activityname = $this->unescape_argument($activityname);
         $cm = $DB->get_record_sql(
             "SELECT cm.id
                FROM {course_modules} cm
@@ -99,7 +100,6 @@ class behat_local_unifiedgrader extends behat_base {
      * @param string $value
      */
     public function i_enter_as_the_overall_grade(string $value): void {
-        $value = $this->unescape_argument($value);
         $node = $this->find('css', '[data-action="grade-input"]');
         $node->setValue($value);
         // Force a focusout — most reliable cross-browser way is to focus
@@ -122,7 +122,6 @@ class behat_local_unifiedgrader extends behat_base {
      * @param string $score
      */
     public function i_set_the_rubric_score_for(string $criterion, string $score): void {
-        $criterion = $this->unescape_argument($criterion);
         // The criterion header is .fw-bold sibling to the score input.
         // Find the row containing the heading text, then the input within.
         $xpath = "//div[contains(@class,'border-bottom')"
@@ -155,7 +154,6 @@ class behat_local_unifiedgrader extends behat_base {
      * @param string $tool Expected tool key (e.g. pen, highlight, texthighlight).
      */
     public function the_active_annotation_layer_should_report_tool(string $tool): void {
-        $tool = $this->unescape_argument($tool);
         // Wait for the propagation tick to settle before reading.
         $this->execute('behat_general::wait_until_the_page_is_ready');
         // Any wrapper carrying the attribute will do — propagation keeps
@@ -280,8 +278,6 @@ class behat_local_unifiedgrader extends behat_base {
      */
     public function user_has_been_graded_with_feedback(string $student, string $feedback, string $activity): void {
         global $DB;
-        $activity = $this->unescape_argument($activity);
-        $feedback = $this->unescape_argument($feedback);
         $cm = $DB->get_record_sql(
             "SELECT cm.id
                FROM {course_modules} cm
@@ -358,8 +354,6 @@ class behat_local_unifiedgrader extends behat_base {
     public function user_has_n_graded_attempts(string $student, int $n, string $activity): void {
         global $DB, $CFG;
         require_once($CFG->dirroot . '/mod/assign/locallib.php');
-
-        $activity = $this->unescape_argument($activity);
         $cmrow = $DB->get_record_sql(
             "SELECT cm.id
                FROM {course_modules} cm
@@ -415,5 +409,59 @@ class behat_local_unifiedgrader extends behat_base {
 
             $previous = $submission;
         }
+    }
+
+    /**
+     * Assert the overall grade input currently holds the given value.
+     *
+     * Core's "the field ... matches value" resolves its locator as a FIELD - name,
+     * id, label or placeholder - so a CSS selector never matches and it reports the
+     * field as missing even though the element is right there. Core's attribute step
+     * is no better here: it reads the value ATTRIBUTE, which keeps the markup's
+     * initial value and does not follow what the user typed.
+     *
+     * So read the live value off the node, which is what the scenarios mean.
+     *
+     * Example:
+     *   Then the overall grade shows "18"
+     *
+     * @Then /^the overall grade shows "(?P<expected>[^"]*)"$/
+     * @param string $expected Value the input should hold; empty string for cleared.
+     */
+    public function the_overall_grade_shows(string $expected): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $actual = (string) $this->find('css', '[data-action="grade-input"]')->getValue();
+        if ($actual !== $expected) {
+            throw new ExpectationException(
+                "Expected the overall grade input to show '{$expected}', found '{$actual}'",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Set one admin setting, named the way get_config() reads it back.
+     *
+     * Core ships "the following config values are set as admin:" for a table of
+     * settings, which is a heavy shape for the single flag most scenarios need in
+     * their Background. This is the one-line form, and it takes the plugin-qualified
+     * name so the feature file reads the same way the setting is written in code.
+     *
+     * A bare name with no slash sets a core setting, matching set_config().
+     *
+     * Example:
+     *   Given the "local_unifiedgrader/enable_assign" admin setting is "1"
+     *
+     * @Given /^the "(?P<setting>[^"]+)" admin setting is "(?P<value>[^"]*)"$/
+     * @param string $setting Setting name, optionally qualified as "plugin/name".
+     * @param string $value Value to store.
+     */
+    public function the_admin_setting_is(string $setting, string $value): void {
+        if (str_contains($setting, '/')) {
+            [$plugin, $name] = explode('/', $setting, 2);
+            set_config($name, $value, $plugin);
+            return;
+        }
+        set_config($setting, $value);
     }
 }
