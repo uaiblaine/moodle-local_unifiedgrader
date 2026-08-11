@@ -2588,7 +2588,7 @@ export default class extends BaseComponent {
         }
         const chip = (id, label) => {
             const el = document.createElement('span');
-            el.className = 'badge ' + (activeTag === id ? 'bg-primary' : 'bg-light text-dark border');
+            el.className = 'badge ' + (activeTag === id ? 'bg-primary text-white' : 'bg-light text-dark border');
             el.style.cursor = 'pointer';
             el.textContent = label;
             el.addEventListener('click', () => onClick(id));

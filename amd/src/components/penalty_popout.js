@@ -424,7 +424,7 @@ export default class PenaltyPopout {
             const isLate = p.category === 'late';
             const badge = document.createElement('span');
             badge.className = isLate
-                ? 'badge bg-danger penalty-active-item local-unifiedgrader-penalty-badge'
+                ? 'badge bg-danger penalty-active-item local-unifiedgrader-penalty-badge text-white'
                 : 'badge bg-warning text-dark penalty-active-item local-unifiedgrader-penalty-badge';
 
             // Use a text node so async getString updates don't wipe child elements.

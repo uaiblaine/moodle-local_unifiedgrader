@@ -1321,7 +1321,7 @@ export default class extends BaseComponent {
             const badge = document.createElement('span');
             if (p.category === 'late') {
                 // Late penalties get a red badge — they are auto-managed and not editable.
-                badge.className = 'badge bg-danger local-unifiedgrader-penalty-badge';
+                badge.className = 'badge bg-danger local-unifiedgrader-penalty-badge text-white';
                 badge.textContent = '-' + p.percentage + '% ' + (p.label || 'Late');
                 getString('penalty_late_label', 'local_unifiedgrader').then((s) => {
                     badge.textContent = '-' + p.percentage + '% ' + (p.label || s);
@@ -1674,7 +1674,7 @@ export default class extends BaseComponent {
         }
 
         const badge = document.createElement('span');
-        badge.className = 'badge bg-danger local-unifiedgrader-penalty-badge';
+        badge.className = 'badge bg-danger local-unifiedgrader-penalty-badge text-white';
         badge.dataset.penalty = 'late';
         badge.textContent = '-' + penaltyPct + '% Late';
         badge.title = '';
@@ -2144,7 +2144,7 @@ export default class extends BaseComponent {
             nameEl.textContent = criterion.shortname;
 
             const maxEl = document.createElement('span');
-            maxEl.className = 'badge bg-secondary';
+            maxEl.className = 'badge bg-secondary text-dark';
             maxEl.textContent = 'Max: ' + criterion.maxscore;
             getString('maxgrade_prefix', 'local_unifiedgrader').then((s) => {
                 maxEl.textContent = s + criterion.maxscore;

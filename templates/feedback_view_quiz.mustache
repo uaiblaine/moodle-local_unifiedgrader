@@ -115,7 +115,7 @@
                         <i class="fa fa-comments" style="font-size: 1.25rem;"></i>
                     </button>
                     <span data-region="comment-count-badge"
-                          class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger {{^commentcount}}d-none{{/commentcount}}"
+                          class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger text-white {{^commentcount}}d-none{{/commentcount}}"
                           style="font-size: 0.6rem;">
                         {{commentcount}}
                     </span>
@@ -132,7 +132,7 @@
                 {{/penalties}}
             {{/haspenalties}}
             {{#gradedisplay}}
-                <span class="badge bg-primary fs-6">
+                <span class="badge bg-primary fs-6 text-white">
                     {{#str}} grade, local_unifiedgrader {{/str}}: {{gradedisplay}}
                 </span>
             {{/gradedisplay}}

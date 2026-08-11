@@ -165,7 +165,7 @@
                         <i class="fa fa-comments" style="font-size: 1.25rem;"></i>
                     </button>
                     <span data-region="comment-count-badge"
-                          class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger {{^commentcount}}d-none{{/commentcount}}"
+                          class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger text-white {{^commentcount}}d-none{{/commentcount}}"
                           style="font-size: 0.6rem;">
                         {{commentcount}}
                     </span>
@@ -183,7 +183,7 @@
                             title="{{#str}} feedbackfiles, local_unifiedgrader {{/str}}">
                         <i class="fa fa-paperclip" style="font-size: 1.25rem;"></i>
                     </button>
-                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-secondary"
+                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-secondary text-dark"
                           style="font-size: 0.6rem;">
                         {{feedbackfilecount}}
                     </span>
@@ -193,7 +193,7 @@
                 </span>
             {{/hasfeedbackfiles}}
             {{#gradedisplay}}
-                <span class="badge bg-primary fs-6">
+                <span class="badge bg-primary fs-6 text-white">
                     {{#str}} grade, local_unifiedgrader {{/str}}: {{gradedisplay}}
                 </span>
             {{/gradedisplay}}
@@ -345,7 +345,7 @@
                                 {{gradingmethodname}}
                             </h6>
                             <div class="d-flex align-items-center gap-2">
-                                <span class="badge bg-primary">{{rubrictotal}} pts</span>
+                                <span class="badge bg-primary text-white">{{rubrictotal}} pts</span>
                                 <button type="button" class="btn btn-link btn-sm p-0 text-muted"
                                         data-action="expand-grading"
                                         data-bs-toggle="modal"
@@ -404,7 +404,7 @@
                                 {{gradingmethodname}}
                             </h6>
                             <div class="d-flex align-items-center gap-2">
-                                <span class="badge bg-primary">{{guidetotal}} / {{guidemaxtotal}}</span>
+                                <span class="badge bg-primary text-white">{{guidetotal}} / {{guidemaxtotal}}</span>
                                 <button type="button" class="btn btn-link btn-sm p-0 text-muted"
                                         data-action="expand-grading"
                                         data-bs-toggle="modal"
@@ -420,7 +420,7 @@
                                 <div class="border-bottom p-3">
                                     <div class="d-flex justify-content-between align-items-start mb-1">
                                         <div class="fw-bold small">{{shortname}}</div>
-                                        <span class="badge {{#hasscore}}bg-primary{{/hasscore}}{{^hasscore}}bg-secondary{{/hasscore}}">
+                                        <span class="badge {{#hasscore}}bg-primary text-white{{/hasscore}}{{^hasscore}}bg-secondary text-dark{{/hasscore}}">
                                             {{#hasscore}}{{score}}{{/hasscore}}{{^hasscore}}&ndash;{{/hasscore}}
                                             / {{maxscore}}
                                         </span>

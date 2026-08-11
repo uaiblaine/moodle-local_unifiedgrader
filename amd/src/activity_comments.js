@@ -99,7 +99,7 @@ export const init = async(cmid, userid) => {
 
     const badge = document.createElement('span');
     badge.setAttribute('data-region', 'comment-count-badge');
-    badge.className = 'position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger'
+    badge.className = 'position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger text-white'
         + (initialCount > 0 ? '' : ' d-none');
     badge.style.fontSize = '0.55rem';
     badge.textContent = initialCount > 0 ? String(initialCount) : '';

@@ -740,7 +740,7 @@ export default class extends BaseComponent {
         if (wrapper && student) {
             this._buildStatusDropdown(wrapper, student);
         } else if (wrapper) {
-            wrapper.innerHTML = '<span class="badge bg-secondary"></span>';
+            wrapper.innerHTML = '<span class="badge bg-secondary text-dark"></span>';
         }
 
         // Show/hide override indicator next to the status badge.
@@ -774,7 +774,7 @@ export default class extends BaseComponent {
         }
 
         const indicator = document.createElement('span');
-        indicator.className = 'local-unifiedgrader-override-indicator badge bg-danger ms-1';
+        indicator.className = 'local-unifiedgrader-override-indicator badge bg-danger ms-1 text-white';
         indicator.style.fontSize = '0.7em';
         indicator.innerHTML = '<i class="fa fa-clock-o me-1"></i>Override';
         wrapper.appendChild(indicator);

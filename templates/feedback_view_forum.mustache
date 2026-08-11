@@ -95,7 +95,7 @@
             </a>
         </div>
         {{#gradedisplay}}
-            <span class="badge bg-primary fs-6">
+            <span class="badge bg-primary fs-6 text-white">
                 {{#str}} grade, local_unifiedgrader {{/str}}: {{gradedisplay}}
             </span>
         {{/gradedisplay}}
@@ -219,7 +219,7 @@
                                 <i class="fa fa-th me-1" aria-hidden="true"></i>
                                 {{gradingmethodname}}
                             </h6>
-                            <span class="badge bg-primary">{{rubrictotal}} pts</span>
+                            <span class="badge bg-primary text-white">{{rubrictotal}} pts</span>
                         </div>
                         <div class="card-body p-0">
                             {{#rubriccriteria}}
@@ -267,14 +267,14 @@
                                 <i class="fa fa-list-ol me-1" aria-hidden="true"></i>
                                 {{gradingmethodname}}
                             </h6>
-                            <span class="badge bg-primary">{{guidetotal}} / {{guidemaxtotal}}</span>
+                            <span class="badge bg-primary text-white">{{guidetotal}} / {{guidemaxtotal}}</span>
                         </div>
                         <div class="card-body p-0">
                             {{#guidecriteria}}
                                 <div class="border-bottom p-3">
                                     <div class="d-flex justify-content-between align-items-start mb-1">
                                         <div class="fw-bold small">{{shortname}}</div>
-                                        <span class="badge {{#hasscore}}bg-primary{{/hasscore}}{{^hasscore}}bg-secondary{{/hasscore}}">
+                                        <span class="badge {{#hasscore}}bg-primary text-white{{/hasscore}}{{^hasscore}}bg-secondary text-dark{{/hasscore}}">
                                             {{#hasscore}}{{score}}{{/hasscore}}{{^hasscore}}&ndash;{{/hasscore}}
                                             / {{maxscore}}
                                         </span>

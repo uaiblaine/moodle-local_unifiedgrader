@@ -1534,10 +1534,10 @@ class quiz_adapter extends base_adapter {
                 . format_string($questionname) . '</span>';
             $html .= '<span>';
             if ($mark !== null) {
-                $html .= '<span class="badge bg-secondary me-1">'
+                $html .= '<span class="badge bg-secondary me-1 text-dark">'
                     . round($mark, 2) . ' / ' . round($maxmark, 2) . '</span>';
             } else {
-                $html .= '<span class="badge bg-secondary me-1">'
+                $html .= '<span class="badge bg-secondary me-1 text-dark">'
                     . '— / ' . round($maxmark, 2) . '</span>';
             }
             $html .= '<span class="badge ' . $stateclass . '">' . $statestring . '</span>';
