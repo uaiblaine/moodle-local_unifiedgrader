@@ -11,6 +11,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Behat excludes @local_unifiedgrader_wip. Those scenarios are placeholders the
+# author tagged as unfinished — they call six step definitions that were never
+# written. They were invisible until 2026-08-11 because a MOODLE_INTERNAL guard
+# in the context file killed the whole Behat process before any of them ran.
+
 jobs:
   # One reusable-workflow call per supported Moodle branch (version.php
   # $plugin->supported) — update these when the supported range changes.
@@ -25,6 +30,7 @@ jobs:
     uses: moodle-an-hochschulen/moodle-workflows/.github/workflows/moodle-plugin-ci.yml@main
     with:
       moodle-core-branch: MOODLE_502_STABLE
+      behat-tags: "@local_unifiedgrader&&~@local_unifiedgrader_wip"
 
   ci-501:
     name: Moodle 5.01
@@ -32,6 +38,7 @@ jobs:
     with:
       moodle-core-branch: MOODLE_501_STABLE
       one-db-only: true
+      behat-tags: "@local_unifiedgrader&&~@local_unifiedgrader_wip"
 
   ci-500:
     name: Moodle 5.00
@@ -39,3 +46,4 @@ jobs:
     with:
       moodle-core-branch: MOODLE_500_STABLE
       one-db-only: true
+      behat-tags: "@local_unifiedgrader&&~@local_unifiedgrader_wip"
