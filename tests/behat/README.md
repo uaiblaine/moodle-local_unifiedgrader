@@ -118,7 +118,8 @@ the maintenance burden is proportional to how custom you go.
 
 ## WIP scenarios — follow-up work
 
-Three scenarios are stubbed out with `@local_unifiedgrader_wip`:
+Four scenarios are stubbed out with `@local_unifiedgrader_wip`. Three of them
+need a step that does not exist yet; the fourth needs a fixture:
 
 1. **Override survives rubric edit (grade_override.feature)** — needs
    a `Given a marking guide is attached to "X" with criteria:` step.
@@ -134,6 +135,10 @@ Three scenarios are stubbed out with `@local_unifiedgrader_wip`:
    that interacts with the multi-select group dropdown (`student_navigator.js`).
    Once the dropdown DOM is stable, `When I select group "X" in the
    navigator` is a thin wrapper around `behat_general::i_click_on`.
+4. **Tool survives a zoom (annotation_toolbar_after_zoom.feature)** —
+   every step it needs exists; what it lacks is a PDF submission to
+   annotate, so it needs a fixture (or a generator step that attaches
+   one) rather than a step definition.
 
 Pick these up when they become important enough to justify the step
 definitions. Until then, the WIP tag keeps them in the file as
