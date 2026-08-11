@@ -37,7 +37,9 @@ jobs:
       fail-fast: false
       matrix:
         php: ['8.2', '8.3']
-        moodle-branch: ['MOODLE_500_STABLE']
+        # One entry per branch in version.php $plugin->supported. Keep the two in step:
+        # a branch listed there and missing here ships unvalidated.
+        moodle-branch: ['MOODLE_500_STABLE', 'MOODLE_501_STABLE', 'MOODLE_502_STABLE']
         database: [pgsql, mariadb]
 
     steps:

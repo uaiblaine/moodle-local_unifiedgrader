@@ -31,7 +31,7 @@ use local_unifiedgrader\adapter\adapter_factory;
  * @covers     \local_unifiedgrader\adapter\forum_adapter
  * @covers     \local_unifiedgrader\adapter\quiz_adapter
  */
-class integration_test extends \advanced_testcase {
+final class integration_test extends \advanced_testcase {
     /** @var \local_unifiedgrader_generator */
     private $gen;
 
