@@ -33,6 +33,10 @@ they're flagged for follow-up rather than left as broken tests.
 | `grade_reset.feature` | `-` clears grade, `--` clears grade + orphan submission, stray characters don't throw |
 | `group_filter.feature` | Default group selection + per-cmid persistence across refreshes |
 | `annotation_toolbar_after_zoom.feature` | Tool clicks still dispatch to the active annotation layer after a zoom — the v2.5.1 / v2.5.2 stuck-tool regression |
+| `feedback_card_reedit.feature` | Re-editing saved overall feedback collapses back to the read-only card on save |
+| `concurrent_save.feature` | A save requested while another is in flight is held and re-run, not dropped |
+| `marking_keyboard_navigation.feature` | Arrow keys navigate students from the page, and never from an editing context |
+| `marking_panel_attempt_selector.feature` | The attempt selector appears for a genuinely multi-attempt submission |
 
 Worth adding next (not in this scaffold):
 
@@ -77,12 +81,35 @@ the critical tag:
 
 ## Custom step definitions
 
-`behat_local_unifiedgrader.php` ships four plugin-specific steps:
+`behat_local_unifiedgrader.php` ships these plugin-specific steps:
+
+Navigation and input
 
 - `I am on the Unified Grader for activity "<name>"` — resolves cmid by activity name
 - `the marking panel has loaded` — waits for the reactive panel to settle
 - `I enter "<value>" as the overall grade` — types into the grade input and triggers focusout
 - `I set the rubric score for "<criterion>" to "<score>"` — fills a marking-guide score input by criterion name
+- `I press the <left|right> arrow key from the <editor toolbar|grade input|page body>` — fires a keydown from a chosen origin
+
+Seeding
+
+- `"<student>" has been graded with feedback "<text>" on "<activity>"` — saves a grade + overall feedback server-side
+- `"<student>" has <n> graded submission attempts on "<activity>"` — seeds multi-attempt submission data
+- `the "<plugin/setting>" admin setting is "<value>"` — one-line `set_config()`
+
+Assertions
+
+- `the overall grade shows "<value>"` — reads the live input value (core's field steps cannot target it by CSS)
+- `the overall feedback is shown as a saved card` / `is open for editing` — waits for the display/editor swap
+- `the active annotation layer should report tool "<tool>"` — reads the layer's own `data-current-tool` stamp
+- `I note the current Unified Grader student` / `the Unified Grader student should be <unchanged|changed>`
+- `the saved grade for "<student>" on "<activity>" is "<value>"` — spins on the stored grade, for scenarios about
+  whether a save reached the server at all
+
+Race construction
+
+- `I enter "<a>" as the overall grade and correct it to "<b>" before the save lands` — drives both saves from one
+  synchronous script, so the overlap is deterministic rather than a race against the network
 
 Everything else uses core Moodle steps (`behat_general`, `behat_forms`,
 `behat_navigation`, `behat_data_generators`). Prefer extending core

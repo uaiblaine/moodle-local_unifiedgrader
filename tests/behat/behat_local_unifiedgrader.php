@@ -440,6 +440,95 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
+     * Type a grade and leave the field — which fires the panel's immediate
+     * focus-out save — then correct it and leave the field again, so the second
+     * save is requested while the first is still in flight.
+     *
+     * Driven as one synchronous script on purpose. The panel raises its
+     * "save in flight" flag synchronously inside the first handler, before the
+     * AJAX promise can settle, so the second request is *guaranteed* to land
+     * mid-flight; spacing the two out as separate Behat steps would turn the
+     * scenario into a race against the network.
+     *
+     * The focus-out save is used rather than the "Save feedback" button because
+     * the button is disabled for the duration of a save, so a teacher cannot
+     * reach that path — the reachable overlaps are this one, "Delete feedback",
+     * and the save the navigator requests before switching student.
+     *
+     * @When /^I enter "(?P<first>[^"]*)" as the overall grade and correct it to "(?P<second>[^"]*)" before the save lands$/
+     * @param string $first Grade typed first, whose save is still in flight.
+     * @param string $second Correction typed during that round trip.
+     */
+    public function i_enter_and_correct_the_grade_before_the_save_lands(string $first, string $second): void {
+        $this->execute('behat_general::wait_until_exists', ['[data-action="grade-input"]', 'css_element']);
+        $a = addslashes($first);
+        $b = addslashes($second);
+        $js = "(function(){"
+            . "var input = document.querySelector('[data-action=\"grade-input\"]');"
+            . "function typeandleave(v) {"
+            . "input.value = v;"
+            . "input.dispatchEvent(new Event('input', {bubbles: true}));"
+            . "input.dispatchEvent(new Event('focusout', {bubbles: true}));"
+            . "}"
+            . "typeandleave('{$a}');"
+            . "typeandleave('{$b}');"
+            . "})();";
+        $this->execute_script($js);
+    }
+
+    /**
+     * Assert the grade the server actually stored for a student, waiting for it.
+     *
+     * Reads the database rather than the page, because the point of the
+     * scenarios that use it is whether a save reached the server at all — a
+     * reload would race the very round trip under test (core/ajax registers no
+     * pending-JS marker, so Behat's page-ready wait does not cover it).
+     *
+     * @Then /^the saved grade for "(?P<student>[^"]+)" on "(?P<activity>[^"]+)" is "(?P<expected>[^"]*)"$/
+     * @param string $student Student username.
+     * @param string $activity Assignment name.
+     * @param string $expected Expected grade; empty string for "no grade".
+     */
+    public function the_saved_grade_for_user_is(string $student, string $activity, string $expected): void {
+        global $DB;
+        $assign = $DB->get_record_sql(
+            "SELECT a.id
+               FROM {assign} a
+              WHERE a.name = :name",
+            ['name' => $activity],
+        );
+        if (!$assign) {
+            throw new Exception("No assignment named '{$activity}' found");
+        }
+        $studentrec = $DB->get_record('user', ['username' => $student], '*', MUST_EXIST);
+        $wanted = $expected === '' ? -1.0 : (float) $expected;
+
+        $this->spin(
+            function () use ($assign, $studentrec, $wanted, $expected) {
+                global $DB;
+                $stored = $DB->get_field_sql(
+                    "SELECT g.grade
+                       FROM {assign_grades} g
+                      WHERE g.assignment = :assignment AND g.userid = :userid
+                   ORDER BY g.attemptnumber DESC",
+                    ['assignment' => $assign->id, 'userid' => $studentrec->id],
+                    IGNORE_MULTIPLE,
+                );
+                $actual = $stored === false ? -1.0 : (float) $stored;
+                if (abs($actual - $wanted) > 0.0001) {
+                    throw new ExpectationException(
+                        "Expected the stored grade to be '{$expected}', found '{$actual}'",
+                        $this->getSession()
+                    );
+                }
+                return true;
+            },
+            [],
+            self::get_timeout()
+        );
+    }
+
+    /**
      * Set one admin setting, named the way get_config() reads it back.
      *
      * Core ships "the following config values are set as admin:" for a table of
