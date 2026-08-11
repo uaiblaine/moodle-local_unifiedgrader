@@ -22,17 +22,6 @@ Feature: Re-editing saved overall feedback collapses back to the saved card
     And "student1" has been graded with feedback "Seeded feedback marker" on "Essay 1"
     And I log in as "teacher1"
 
-  # THIS TEST IS DOING ITS JOB: the regression it was written to catch is present.
-  # After clicking save the editor stays open instead of collapsing back to the read-only
-  # card, which is exactly the symptom described in the comment below. The initial card
-  # check and the edit-mode check both pass, so the step and its selectors are sound; it
-  # is the post-save collapse that never happens.
-  #
-  # It never reported this because the pack has never run: a MOODLE_INTERNAL guard in the
-  # context file killed Behat at include time from the day it was scaffolded (2026-05-22)
-  # until 2026-08-11. Parked so CI is honest rather than permanently red; fixing the
-  # product belongs to whoever owns the panel. Untag to reproduce.
-  @local_unifiedgrader_wip
   Scenario: Re-editing existing feedback collapses to the saved card on save
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded

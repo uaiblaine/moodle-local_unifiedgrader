@@ -98,10 +98,10 @@ export default class extends BaseComponent {
             MARK_GRADED_TOGGLE: '[data-action="mark-graded-toggle"]',
         };
         this._editingFeedback = false;
-        // One-shot: set when a save is dispatched while the teacher is
-        // re-editing existing feedback, so the post-save render collapses the
-        // editor back to the read-only "saved" card (see _handleSaveGrade /
-        // _renderFeedbackAndSnapshot).
+        // One-shot: set when an explicitly requested save is dispatched while
+        // the teacher is re-editing existing feedback, so the post-save render
+        // collapses the editor back to the read-only "saved" card (see
+        // _handleSaveGrade / _renderFeedbackAndSnapshot).
         this._collapseFeedbackAfterSave = false;
         this._penaltyPopout = null;
         this._gradingDefinition = null;
@@ -442,7 +442,7 @@ export default class extends BaseComponent {
         // Save grade button.
         const saveBtn = this.getElement(this.selectors.SAVE_GRADE_BTN);
         if (saveBtn) {
-            saveBtn.addEventListener('click', () => this._handleSaveGrade());
+            saveBtn.addEventListener('click', () => this._handleSaveGrade(true));
         }
 
         // Edit feedback button.
@@ -799,15 +799,22 @@ export default class extends BaseComponent {
         // Reset editing flag — _renderGrade fires on student switch and after save.
         if (isFreshRender) {
             this._editingFeedback = false;
-        } else if (this._collapseFeedbackAfterSave && !this._isFeedbackEditorFocused()) {
-            // A save the teacher started while re-editing existing feedback has
-            // landed (state now holds the freshly-saved feedback) and they are
-            // no longer typing — collapse the editor back to the read-only
-            // "saved" card so a re-edit gets the same confirmation a first-time
-            // save does. Without this the editor stayed open and the save looked
-            // like it had failed. The focus guard keeps the editor open if a
-            // background save (e.g. a debounced rubric save) lands while the
-            // teacher is still typing feedback.
+        } else if (this._collapseFeedbackAfterSave) {
+            // A save the teacher explicitly asked for while re-editing existing
+            // feedback has landed (state now holds the freshly-saved feedback) —
+            // collapse the editor back to the read-only "saved" card so a re-edit
+            // gets the same confirmation a first-time save does. Without this the
+            // editor stayed open and the save looked like it had failed.
+            //
+            // Background saves (the debounced rubric save, the pre-navigation
+            // save) must NOT collapse the editor under the teacher, and they
+            // never arm the flag — _handleSaveGrade only arms it for an explicit
+            // save. Deciding that here by reading editor focus instead is what
+            // broke this: whether pressing "Save feedback" moves focus off the
+            // TinyMCE iframe is browser-specific (Safari and Firefox on macOS
+            // leave focus where it was when a button is clicked, and so does any
+            // programmatic .click()), so the teacher's save confirmation came and
+            // went depending on the browser.
             this._editingFeedback = false;
         }
         // One-shot — consumed by the first render after the save dispatch.
@@ -888,22 +895,6 @@ export default class extends BaseComponent {
     }
 
     /**
-     * Whether the TinyMCE overall-feedback editor currently has focus. Used to
-     * avoid collapsing the editor to the saved card while the teacher is still
-     * typing (e.g. a background rubric save lands mid-edit).
-     *
-     * @return {boolean} True when the feedback editor is focused.
-     */
-    _isFeedbackEditorFocused() {
-        const textarea = this.getElement(this.selectors.FEEDBACK_INPUT);
-        if (!textarea) {
-            return false;
-        }
-        const editor = getInstanceForElementId(textarea.id);
-        return !!(editor && editor.hasFocus());
-    }
-
-    /**
      * Handle "Edit" button click on the feedback display banner.
      */
     _handleEditFeedback() {
@@ -951,7 +942,7 @@ export default class extends BaseComponent {
         // Clear the editor content and save with empty feedback. Force the
         // update: an explicit Delete action should always wipe the editor.
         this._updateFeedbackContent('', true);
-        this._handleSaveGrade();
+        this._handleSaveGrade(true);
     }
 
     /**
@@ -2812,8 +2803,15 @@ export default class extends BaseComponent {
 
     /**
      * Handle save grade action.
+     *
+     * @param {boolean} explicit True when the teacher asked for this save (the
+     *        "Save feedback" button, "Delete feedback"), false for the saves the
+     *        panel fires on its own (debounced rubric autosave, focus-out of the
+     *        grade input, the save issued before navigating to another student).
+     *        Only an explicit save collapses a re-opened feedback editor back to
+     *        the saved card.
      */
-    _handleSaveGrade() {
+    _handleSaveGrade(explicit = false) {
         // Cancel any pending auto-save to prevent double saves.
         if (this._autoSaveTimer) {
             clearTimeout(this._autoSaveTimer);
@@ -2893,11 +2891,12 @@ export default class extends BaseComponent {
         const reset = !!this._fullResetRequested;
         this._fullResetRequested = false;
 
-        // If this save was started while re-editing existing feedback, arm the
-        // post-save render to collapse the editor back to the saved card (see
-        // _renderFeedbackAndSnapshot). Captured here, past every early return,
-        // so only a genuinely dispatched save arms it.
-        this._collapseFeedbackAfterSave = this._editingFeedback;
+        // If the teacher explicitly asked for this save while re-editing
+        // existing feedback, arm the post-save render to collapse the editor
+        // back to the saved card (see _renderFeedbackAndSnapshot). Captured
+        // here, past every early return, so only a genuinely dispatched save
+        // arms it. A background save leaves the editor alone.
+        this._collapseFeedbackAfterSave = explicit && this._editingFeedback;
 
         this.reactive.dispatch(
             'saveGrade',
