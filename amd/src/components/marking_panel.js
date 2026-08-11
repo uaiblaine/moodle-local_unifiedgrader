@@ -144,6 +144,10 @@ export default class extends BaseComponent {
         this._autoSaveTimer = null;
         this._suppressAutoSave = false;
         this._saveInFlight = false;
+        // A save requested while another one was in flight, held until the round
+        // trip finishes and re-run then (see _handleSaveGrade / _updateUI). Null
+        // when nothing is waiting; otherwise {explicit: boolean, userid: number}.
+        this._pendingSaveRequest = null;
         this._reportButtonLabel = 'Report academic impropriety';
         // Default label for the standalone grade-pane referral button; captured
         // from the rendered span on init, with this English fallback for safety.
@@ -1044,6 +1048,16 @@ export default class extends BaseComponent {
                 if (cmid && userid) {
                     OfflineCache.remove(cmid, userid, 'grade');
                     OfflineCache.remove(cmid, userid, 'feedback');
+                }
+
+                // Run a save that arrived while this one was in flight. It reads
+                // the live form now, so it carries whatever the teacher changed
+                // during the round trip. Cleared before dispatching, so the
+                // re-run can queue a request of its own without looping.
+                const pending = this._pendingSaveRequest;
+                this._pendingSaveRequest = null;
+                if (pending && pending.userid === state.currentUser?.id) {
+                    this._handleSaveGrade(pending.explicit);
                 }
             }
         }
@@ -2804,6 +2818,9 @@ export default class extends BaseComponent {
     /**
      * Handle save grade action.
      *
+     * Saves never overlap: one requested while another is in flight is held and
+     * re-run when the round trip finishes, rather than dropped.
+     *
      * @param {boolean} explicit True when the teacher asked for this save (the
      *        "Save feedback" button, "Delete feedback"), false for the saves the
      *        panel fires on its own (debounced rubric autosave, focus-out of the
@@ -2833,9 +2850,25 @@ export default class extends BaseComponent {
             return;
         }
 
-        // Prevent overlapping saves — if a save is already in flight,
-        // skip this one entirely to avoid stale data overwriting fresh data.
+        // Prevent overlapping saves — a second dispatch while one is in flight
+        // races the first, and the older response can overwrite fresher data.
+        //
+        // Hold the request rather than dropping it. The in-flight save read the
+        // form at ITS dispatch, so anything changed since is not in it; dropping
+        // the request loses that edit silently, behind a save that reported
+        // success. _updateUI re-runs it when the round trip finishes. One slot is
+        // enough: the held request reads the live form when it finally
+        // dispatches, so a third request only has to keep a re-run scheduled.
         if (this._saveInFlight) {
+            this._pendingSaveRequest = {
+                // Sticky, so an explicit request keeps its post-save collapse
+                // even when a background one is queued on top of it.
+                explicit: explicit || !!this._pendingSaveRequest?.explicit,
+                // The student it was requested for. If the teacher has moved on
+                // by the time the round trip ends, the re-run would be reading
+                // somebody else's form, so it is discarded instead.
+                userid: this.reactive.state.currentUser?.id,
+            };
             return;
         }
         this._saveInFlight = true;
