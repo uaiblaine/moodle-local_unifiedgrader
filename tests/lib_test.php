@@ -23,7 +23,8 @@ namespace local_unifiedgrader;
  * @category   test
  * @copyright  2026 South African Theological Seminary (mathieu@sats.ac.za)
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- * @coversDefaultClass \local_unifiedgrader
+ * @covers ::local_unifiedgrader_pluginfile
+ * @covers ::local_unifiedgrader_extend_settings_navigation
  */
 final class lib_test extends \advanced_testcase {
     /**
