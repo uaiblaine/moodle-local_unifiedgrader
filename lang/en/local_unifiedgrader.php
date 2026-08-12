@@ -223,6 +223,7 @@ $string['edit_feedback'] = 'Edit';
 $string['editing'] = 'Editing...';
 $string['error_criterion_score_not_numeric'] = 'Marking-guide scores must be numbers. Please correct any non-numeric marks and save again.';
 $string['error_file_not_found'] = 'Source file not found.';
+$string['error_grade_clear_blocked_by_gradebook'] = 'This student is graded in the gradebook with a locked or overridden grade, so clearing the grade here would not take effect. Open the gradebook, remove the override (or unlock the grade) for this student, then clear it again from the Unified Grader. To clear the grade and remove an accidental submission row in one step, type -- instead.';
 $string['error_grade_exceeds_max'] = 'Grade cannot exceed the activity maximum ({$a}). Extra credit is not currently supported.';
 $string['error_grade_locked_in_gradebook'] = 'This student\'s grade is locked or overridden in the gradebook, so marking-guide / rubric scores cannot be saved here. Open the gradebook, edit the grade for this student, remove the override (or unlock the grade), then save again from the Unified Grader.';
 $string['error_gs_not_configured'] = 'GhostScript is not configured on this Moodle server. The administrator must set the GhostScript path in Site administration > Plugins > Activity modules > Assignment > Feedback > Annotate PDF.';

@@ -657,6 +657,28 @@ class assign_adapter extends base_adapter {
         // a pure "no grade" clear, which must not silently lift a penalty.
         // Hard-block (locked) still surfaces a clear error so the teacher knows
         // to deal with it explicitly.
+        //
+        // A pure clear takes the other branch below: it must not lift the
+        // override, but it must not pretend to have worked either.
+        if (($grade === null && empty($advancedgradingdata)) && $this->assign->grading_disabled($userid)) {
+            /*
+             * Clearing the grade cannot land while the gradebook entry is
+             * locked or overridden: core's apply_grade_to_user() wraps the
+             * whole write in if (!$gradingdisabled), so the previous mark
+             * survives and the save still reports success — the teacher
+             * believes the student is ungraded when they are not.
+             *
+             * Refusing out loud is the honest outcome. Lifting the override
+             * here instead would silently drop a penalty (or a deliberate
+             * gradebook edit) the teacher never asked to drop; the "--"
+             * deliberate reset is the path that does lift it, on purpose,
+             * via reset_grade_and_submission().
+             */
+            throw new \moodle_exception(
+                'error_grade_clear_blocked_by_gradebook',
+                'local_unifiedgrader',
+            );
+        }
         if (($grade !== null || !empty($advancedgradingdata)) && $this->assign->grading_disabled($userid)) {
             $cleared = $this->clear_recoverable_gradebook_block($userid);
             // Re-checking via $this->assign->grading_disabled() would call
