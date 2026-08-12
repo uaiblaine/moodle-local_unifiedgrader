@@ -36,12 +36,7 @@ Feature: Manual grade override locks against subsequent rubric edits
     And the marking panel has loaded
     Then the overall grade shows "18"
 
-  @local_unifiedgrader_wip
   Scenario: Override survives a rubric score edit
-    # Requires a rubric to be attached to the activity. Marking-guide
-    # creation through Behat data generators isn't straightforward, so
-    # this scenario is WIP until we add a generator helper or a custom
-    # step that creates the rubric via the gradingform_guide API.
     Given a marking guide is attached to "Essay 1" with criteria:
       | shortname     | maxscore |
       | Argumentation | 10       |

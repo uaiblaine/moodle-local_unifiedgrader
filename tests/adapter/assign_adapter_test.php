@@ -499,6 +499,88 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * The "--" deliberate reset clears the grade, but only strips the orphan
+     * submission when the grader may edit other people's submissions.
+     *
+     * Two legs on purpose, because the first alone would read as "the reset
+     * works" when half of it silently did nothing.
+     *
+     * remove_submission() is gated on can_edit_submission(), which for another
+     * user's submission requires mod/assign:editothersubmission - a capability
+     * core defines with RISK_DATALOSS and grants to NO archetype, not even
+     * manager. So on a default site the submission half of the reset is inert,
+     * and "--" behaves exactly like "-": the grade goes, the row and its
+     * plugin data stay. Nothing here is broken; the capability is simply not
+     * held, and this test says so out loud instead of leaving the difference
+     * to be discovered in the field.
+     *
+     * Note what does NOT happen even with the capability: the row is never
+     * deleted. remove_submission() resets status to new/reopened and asks each
+     * submission plugin to drop its data (mod/assign/locallib.php), which is
+     * why an assertion of the "no submission row remains" shape can never hold.
+     */
+    public function test_full_reset_strips_the_orphan_only_with_the_capability(): void {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+        $context = \context_module::instance($s->scenario->cm->id);
+        [$course, $cm] = get_course_and_cm_from_cmid($s->scenario->cm->id, 'assign');
+        $assignobj = new \assign($context, $cm, $course);
+
+        // The row an accidental teacher interaction leaves behind: created,
+        // never submitted, carrying whatever the submission plugins wrote.
+        $submission = $assignobj->get_user_submission($student->id, true);
+        $DB->insert_record('assignsubmission_onlinetext', (object) [
+            'assignment' => $s->scenario->activity->id,
+            'submission' => $submission->id,
+            'onlinetext' => 'Orphan content',
+            'onlineformat' => FORMAT_HTML,
+        ]);
+        $this->setUser($s->scenario->teacher);
+        $s->adapter->save_grade($student->id, 12.0, '');
+        $this->assertEquals(
+            12.0,
+            $s->adapter->get_grade_data($student->id)['grade'],
+            'Precondition: there is a grade to reset.'
+        );
+        $this->assertNotEmpty(
+            $DB->get_record('assignsubmission_onlinetext', ['submission' => $submission->id]),
+            'Precondition: the orphan carries submission plugin data.'
+        );
+
+        // Leg 1: default editing teacher, no editothersubmission.
+        $s->adapter->reset_grade_and_submission($student->id);
+        $this->assertNull(
+            $s->adapter->get_grade_data($student->id)['grade'],
+            'The grade half of the reset always happens.'
+        );
+        $this->assertNotEmpty(
+            $DB->get_record('assignsubmission_onlinetext', ['submission' => $submission->id]),
+            'Without mod/assign:editothersubmission the submission half is inert.'
+        );
+
+        // Leg 2: the same reset, once the grader may edit the submission.
+        $roleid = $DB->get_field('role', 'id', ['shortname' => 'editingteacher'], MUST_EXIST);
+        assign_capability('mod/assign:editothersubmission', CAP_ALLOW, $roleid, $context->id, true);
+        accesslib_clear_all_caches_for_unit_testing();
+
+        $adapter = adapter_factory::create($s->scenario->cm->id);
+        $adapter->save_grade($student->id, 12.0, '');
+        $adapter->reset_grade_and_submission($student->id);
+
+        $this->assertEmpty(
+            $DB->get_record('assignsubmission_onlinetext', ['submission' => $submission->id]),
+            'With the capability the submission plugin data is dropped.'
+        );
+        $row = $DB->get_record('assign_submission', ['id' => $submission->id]);
+        $this->assertNotEmpty($row, 'The row itself is never deleted - only reset.');
+        $this->assertSame(ASSIGN_SUBMISSION_STATUS_NEW, $row->status);
+    }
+
+    /**
      * Test is_grade_released with no grade returns false.
      */
     public function test_is_grade_released_no_grade(): void {

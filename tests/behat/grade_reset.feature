@@ -56,16 +56,11 @@ Feature: Dash escape hatches in the overall grade input
     And I should not see "Exception"
     And the saved grade for "student1" on "Essay 1" is ""
 
-  @local_unifiedgrader_wip
-  Scenario: Typing "--" removes the orphan submission row too
-    # Needs a step to seed an assign_submission row with status='new'
-    # (e.g. via a custom data generator step or a direct $DB write).
-    # The assertion would then verify, after refreshing, that the
-    # student shows as "Not submitted" (no orphan row left behind).
-    Given student "student1" has an orphan submission marker for activity "Essay 1"
-    When I am on the Unified Grader for activity "Essay 1"
-    And the marking panel has loaded
-    And I enter "--" as the overall grade
-    When I reload the page
-    Then I should see "Not submitted"
-    And student "student1" has no submission row for activity "Essay 1"
+  # There is deliberately no "--" scenario here. The deliberate reset differs
+  # from "-" only in what it does to the submission row, and none of that is
+  # observable through the browser: resolve_status() already reports a row with
+  # status "new" as "nosubmission", so the page reads the same before and after,
+  # and remove_submission() never deletes the row anyway. What it really does -
+  # drop the submission plugin data, and only when the grader holds
+  # mod/assign:editothersubmission - is asserted directly against the database
+  # in assign_adapter_test::test_full_reset_strips_the_orphan_only_with_the_capability.
