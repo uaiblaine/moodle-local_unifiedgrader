@@ -33,6 +33,7 @@
 
 require_once(__DIR__ . '/../../../../lib/behat/behat_base.php');
 
+use Behat\Gherkin\Node\TableNode;
 use Behat\Mink\Exception\ExpectationException;
 
 /**
@@ -130,11 +131,78 @@ class behat_local_unifiedgrader extends behat_base {
     public function i_enter_as_the_overall_grade(string $value): void {
         $node = $this->find('css', '[data-action="grade-input"]');
         $node->setValue($value);
-        // Force a focusout — most reliable cross-browser way is to focus
-        // a different element. The save button is always present.
-        $this->execute('behat_general::i_click_on', [
-            '[data-region="marking-content"]', 'css_element',
-        ]);
+        // Blur the input itself rather than clicking somewhere else to steal
+        // focus. This used to click the middle of [data-region="marking-content"]
+        // — and the middle of that region is the Marking guide card header,
+        // which is a Bootstrap collapse toggle, so entering a grade quietly
+        // collapsed the guide and every later step that touched a criterion
+        // score failed with "element not interactable". blur() fires the same
+        // real focusout the listener is bound to, without depending on what
+        // happens to be under the centre of the panel.
+        $this->execute_script(
+            "(function(){var i=document.querySelector('[data-action=\"grade-input\"]');"
+            . "if (i) { i.blur(); }})();"
+        );
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+    }
+
+    /**
+     * Attach a marking guide to an assignment, with the given criteria.
+     *
+     * Core has no Behat data generator for grading forms, but it does ship a
+     * PHPUnit one — gradingform_guide_generator::create_instance() — and that
+     * generator already resolves its dependencies through
+     * testing_util::get_data_generator(), so it works unchanged from here.
+     * Hand-rolling a definition and calling update_definition() directly would
+     * duplicate a helper core already maintains.
+     *
+     * The generator refuses to run as user 0; Behat's own before-scenario hook
+     * has already switched to admin by the time a Given runs, so that holds.
+     *
+     * Example:
+     *   Given a marking guide is attached to "Essay 1" with criteria:
+     *     | shortname     | maxscore |
+     *     | Argumentation | 10       |
+     *
+     * @Given /^a marking guide is attached to "(?P<activity>[^"]+)" with criteria:$/
+     * @param string $activity Assignment name.
+     * @param TableNode $criteria Rows of shortname + maxscore.
+     */
+    public function a_marking_guide_is_attached_to(string $activity, TableNode $criteria): void {
+        global $DB;
+        $cm = $DB->get_record_sql(
+            "SELECT cm.id
+               FROM {course_modules} cm
+               JOIN {modules} m ON m.id = cm.module AND m.name = 'assign'
+               JOIN {assign} a ON a.id = cm.instance
+              WHERE a.name = :name",
+            ['name' => $activity],
+        );
+        if (!$cm) {
+            throw new Exception("No assignment named '{$activity}' found");
+        }
+
+        $definition = [];
+        foreach ($criteria->getHash() as $row) {
+            $definition[$row['shortname']] = [
+                // The panel keys its criterion inputs off the visible heading,
+                // so description and markers mirror the shortname rather than
+                // inventing prose the scenarios would then have to know about.
+                'description' => $row['shortname'],
+                'descriptionmarkers' => $row['shortname'],
+                'maxscore' => (float) $row['maxscore'],
+            ];
+        }
+
+        $generator = \testing_util::get_data_generator()->get_plugin_generator('gradingform_guide');
+        $generator->create_instance(
+            \context_module::instance((int) $cm->id),
+            'mod_assign',
+            'submissions',
+            $activity . ' guide',
+            '',
+            $definition,
+        );
     }
 
     /**
@@ -157,8 +225,38 @@ class behat_local_unifiedgrader extends behat_base {
             . behat_context_helper::escape($criterion)
             . "]]"
             . "//input[@data-criterionid and not(@data-levelid)]";
-        $input = $this->find('xpath', $xpath);
-        $input->setValue($score);
+
+        // Re-find on every attempt instead of typing into a node located
+        // earlier. _renderAdvancedGrading rebuilds the criterion DOM on the
+        // render that follows a save, so a node found before that lands is
+        // detached by the time the keystrokes arrive and the driver reports it
+        // as not interactable. Setting a score right after a save-triggering
+        // step is an ordinary thing for a scenario to do, so the step absorbs
+        // the rebuild rather than making every caller sequence around it.
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $this->spin(
+            function () use ($xpath, $score) {
+                $input = $this->find('xpath', $xpath);
+                $input->setValue($score);
+                // Confirm the value survived. _renderGuide repopulates every
+                // criterion input from server fill data on the render that
+                // follows a save, so a score typed while that is in flight is
+                // silently overwritten a moment later - and the scenario then
+                // asserts against a panel that never saw the edit. Retrying
+                // until the value sticks is what makes this step mean what it
+                // says; without it a scenario setting a score after a save
+                // passes while proving nothing.
+                if ((string) $this->find('xpath', $xpath)->getValue() !== $score) {
+                    throw new ExpectationException(
+                        "The criterion score did not stick as '{$score}'",
+                        $this->getSession()
+                    );
+                }
+                return true;
+            },
+            [],
+            self::get_timeout()
+        );
     }
 
     /**
@@ -330,6 +428,16 @@ class behat_local_unifiedgrader extends behat_base {
      * (display visible, editor hidden). The post-save collapse is async (AJAX
      * save + reactive re-render), so this spins rather than checking once.
      *
+     * On failure it reports what it actually saw, because the DOM state it
+     * waits for has more than one cause. _toggleFeedbackMode only shows the
+     * card when there is feedback AND the panel is not in editing mode, so
+     * "no card" is produced identically by an editing flag that stayed set and
+     * by a save that wiped the feedback. Naming one of them in the message
+     * would be a guess; dumping the observed state lets whoever reads the
+     * failure tell them apart without a faildump. (Diagnosing exactly this
+     * cost a full instrumentation cycle when the v2.8.5 collapse bug was
+     * being chased.)
+     *
      * @Then /^the overall feedback is shown as a saved card$/
      */
     public function the_overall_feedback_is_shown_as_a_saved_card(): void {
@@ -338,9 +446,31 @@ class behat_local_unifiedgrader extends behat_base {
             . "var e=document.querySelector('[data-region=\"feedback-editor-wrapper\"]');"
             . "return !!(d && !d.classList.contains('d-none') && e && e.classList.contains('d-none'));"
             . "})()";
-        if (!$this->getSession()->wait(self::get_timeout() * 1000, $js)) {
-            throw new Exception('The overall feedback did not collapse to the saved card.');
+        if ($this->getSession()->wait(self::get_timeout() * 1000, $js)) {
+            return;
         }
+        $observed = (string) $this->evaluate_script(
+            "(function(){"
+            . "function seen(sel){var n=document.querySelector(sel);"
+            . "return n ? (n.classList.contains('d-none') ? 'hidden' : 'visible') : 'absent';}"
+            . "function len(sel){var n=document.querySelector(sel);"
+            . "return n ? (n.textContent || '').trim().length : -1;}"
+            . "var f=document.querySelector('.tox-edit-area__iframe');"
+            . "var editorchars=-1;"
+            . "try { editorchars = f && f.contentDocument"
+            . " ? (f.contentDocument.body.textContent || '').trim().length : -1; } catch (e) {}"
+            . "return 'card=' + seen('[data-region=\"feedback-display\"]')"
+            . " + ', editor=' + seen('[data-region=\"feedback-editor-wrapper\"]')"
+            . " + ', card text=' + len('[data-region=\"feedback-display-content\"]') + ' chars'"
+            . " + ', editor text=' + editorchars + ' chars';"
+            . "})()"
+        );
+        throw new ExpectationException(
+            'The overall feedback did not collapse to the saved card. Observed: ' . $observed
+                . '. An editor still holding text points at the editing flag; an empty one points at the'
+                . ' save having wiped the feedback.',
+            $this->getSession()
+        );
     }
 
     /**

@@ -29,9 +29,10 @@ they're flagged for follow-up rather than left as broken tests.
 
 | File | Critical flow |
 |---|---|
-| `grade_override.feature` | Manual grade override survives subsequent rubric edits |
-| `grade_reset.feature` | `-` clears grade, `--` clears grade + orphan submission, stray characters don't throw |
+| `grade_override.feature` | Manual grade override survives subsequent marking-guide edits |
+| `grade_reset.feature` | `-` clears the grade and the clear reaches the server; stray characters reset without throwing |
 | `group_filter.feature` | Default group selection + per-cmid persistence across refreshes |
+| `quiz_grade_readonly.feature` | The quiz total is a read-only readout; an assignment grade stays editable |
 | `annotation_toolbar_after_zoom.feature` | Tool clicks still dispatch to the active annotation layer after a zoom — the v2.5.1 / v2.5.2 stuck-tool regression |
 | `feedback_card_reedit.feature` | Re-editing saved overall feedback collapses back to the read-only card on save |
 | `concurrent_save.feature` | A save requested while another is in flight is held and re-run, not dropped |
@@ -118,27 +119,34 @@ the maintenance burden is proportional to how custom you go.
 
 ## WIP scenarios — follow-up work
 
-Four scenarios are stubbed out with `@local_unifiedgrader_wip`. Three of them
-need a step that does not exist yet; the fourth needs a fixture:
+Two scenarios are stubbed out with `@local_unifiedgrader_wip`:
 
-1. **Override survives rubric edit (grade_override.feature)** — needs
-   a `Given a marking guide is attached to "X" with criteria:` step.
-   The gradingform_guide API doesn't have a Behat generator out of the
-   box; we'd need a custom step that calls
-   `gradingform_guide_controller::update_definition()` with a definition
-   built from the table data. ~30 lines.
-2. **`--` removes orphan submission (grade_reset.feature)** — needs a
-   step to seed an `assign_submission` row with `status='new'` plus an
-   assertion step that the row is gone. Either custom generator or
-   direct `$DB` write.
-3. **Group filter persistence (group_filter.feature)** — needs a step
+1. **Group filter persistence (group_filter.feature)** — needs a step
    that interacts with the multi-select group dropdown (`student_navigator.js`).
-   Once the dropdown DOM is stable, `When I select group "X" in the
-   navigator` is a thin wrapper around `behat_general::i_click_on`.
-4. **Tool survives a zoom (annotation_toolbar_after_zoom.feature)** —
+   Prefer setting the value and dispatching `change` over simulating clicks:
+   the scenario is about persistence, not about the dropdown's mechanics, and
+   a collapsed container makes its controls non-interactable.
+2. **Tool survives a zoom (annotation_toolbar_after_zoom.feature)** —
    every step it needs exists; what it lacks is a PDF submission to
-   annotate, so it needs a fixture (or a generator step that attaches
-   one) rather than a step definition.
+   annotate. That means a real fixture, not a stub string: the existing
+   helper writes `%PDF-1.4 test file content`, which PDF.js cannot parse,
+   so no annotation layer is ever created. Even with one, the scenario
+   drives PDF.js rendering, zoom and a Fabric canvas — the headless-fragile
+   shape this pack is meant to stay away from. Covering the propagation
+   logic without the rendering stack is the better trade.
+
+Two former entries are gone rather than done:
+
+- **Override survives a rubric edit** is now a live scenario in
+  `grade_override.feature`; the missing piece was a marking-guide generator,
+  and core ships one (`gradingform_guide_generator`) that works from a Behat
+  context unchanged.
+- **`--` removes the orphan submission** was removed as unwritable. None of
+  what the deliberate reset does is visible through the browser — a row with
+  status `new` already reads as "not submitted", and the row is never deleted
+  — so it is asserted against the database in
+  `assign_adapter_test::test_full_reset_strips_the_orphan_only_with_the_capability`
+  instead.
 
 Pick these up when they become important enough to justify the step
 definitions. Until then, the WIP tag keeps them in the file as
