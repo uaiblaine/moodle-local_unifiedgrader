@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Сообщения';
 $string['forum_wordcount'] = '{$a} слов';
 $string['forum_your_posts'] = 'Ваши сообщения на форуме';
 $string['grade'] = 'Оценка';
+$string['gradecomputedfromquestions'] = 'Рассчитывается по баллам за вопросы ниже — измените их, чтобы изменить итог.';
 $string['grades_hidden'] = 'Оценки скрыты';
 $string['grades_posted'] = 'Оценки опубликованы';
 $string['grades_scheduled'] = 'Публикация {$a}';

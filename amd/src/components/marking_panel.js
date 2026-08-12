@@ -42,6 +42,7 @@ export default class extends BaseComponent {
             GRADE_SECTION: '[data-region="grade-section"]',
             GRADE_INPUT: '[data-action="grade-input"]',
             GRADE_ERROR: '[data-region="grade-error"]',
+            GRADE_COMPUTED_HINT: '[data-region="grade-computed-hint"]',
             GRADE_OVERRIDE_INDICATOR: '[data-region="grade-override-indicator"]',
             GRADE_RUBRIC_VALUE: '[data-region="grade-rubric-value"]',
             GRADE_RESET_RUBRIC_BTN: '[data-action="grade-reset-rubric"]',
@@ -206,6 +207,14 @@ export default class extends BaseComponent {
         const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
         if (gradeInput) {
             gradeInput.addEventListener('input', () => {
+                // A read-only box cannot have been typed into, so an input event
+                // on one is synthetic — the offline-cache restore dispatches one
+                // (grader.js _restoreFromCache). Treating that as a manual
+                // override would freeze the computed readout on a quiz behind a
+                // value that has nowhere to be saved.
+                if (gradeInput.readOnly) {
+                    return;
+                }
                 // Canonicalise comma → period so a teacher in a comma-decimal
                 // locale can enter "3,5" and it round-trips correctly.
                 if (gradeInput.value && gradeInput.value.indexOf(',') !== -1) {
@@ -757,9 +766,28 @@ export default class extends BaseComponent {
 
                 // When advanced grading is active and manual override is not allowed,
                 // make the grade input readonly so teachers must use the rubric/guide.
+                //
+                // A quiz is ALWAYS readonly, whatever the override setting says.
+                // Its total is derived: mod_quiz's grade_calculator rewrites
+                // quiz_grades from the attempt sumgrades and the grading method on
+                // every recompute — a per-question save, a regrade, a max-grade
+                // change, even the update_overdue_attempts cron with nobody at the
+                // keyboard. The table has no override column, so quiz_adapter has
+                // nowhere to put a typed total and deliberately discards it (see
+                // quiz_adapter_test::test_save_grade_does_not_persist_a_typed_quiz_total).
+                // The box has always been a computed readout; it just used to accept
+                // typing and throw it away. Teachers move a quiz total by changing
+                // the question marks, or with a gradebook override.
+                const isQuiz = state.activity?.type === 'quiz';
                 const hasAdvancedGrading = this._gradingDefinition !== null;
                 const allowOverride = state.ui?.allowmanualgradeoverride !== false;
-                gradeInput.readOnly = hasAdvancedGrading && !allowOverride;
+                gradeInput.readOnly = isQuiz || (hasAdvancedGrading && !allowOverride);
+
+                // Explain the locked box, or it just reads as broken.
+                const computedHint = this.getElement(this.selectors.GRADE_COMPUTED_HINT);
+                if (computedHint) {
+                    computedHint.classList.toggle('d-none', !isQuiz);
+                }
             }
         }
 
@@ -1166,6 +1194,23 @@ export default class extends BaseComponent {
         }
         // Scale-based grading uses the dropdown — nothing to validate here.
         if (this.reactive.state.activity?.usescale) {
+            return true;
+        }
+        // Neither is there anything to validate on a quiz. The box is a
+        // read-only readout of a total this panel computes itself
+        // (_computeRubricGrade's quizmanual branch returns the quiz grade plus
+        // the manual-mark delta, with no upper clamp), so refusing the save
+        // when it exceeds the activity max would block a legitimate
+        // per-question save over a number the teacher cannot even edit. The
+        // server takes the same position — save_grade skips the max check for
+        // quizzes because "quiz grades are similarly clamped by the question
+        // engine". Clear any stale invalid styling on the way out.
+        if (this.reactive.state.activity?.type === 'quiz') {
+            gradeInput.classList.remove('is-invalid');
+            if (errorEl) {
+                errorEl.classList.add('d-none');
+                errorEl.textContent = '';
+            }
             return true;
         }
         const maxgrade = parseFloat(gradeInput.max);

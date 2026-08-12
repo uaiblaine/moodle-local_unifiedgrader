@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Izithunyelwe';
 $string['forum_wordcount'] = '{$a} amagama';
 $string['forum_your_posts'] = 'Izithunyelwe zakho zeforamu';
 $string['grade'] = 'Amanqaku';
+$string['gradecomputedfromquestions'] = 'Ibalwa kumanqaku emibuzo angezantsi — tshintsha loo manqaku ukuze uyitshintshe.';
 $string['grades_hidden'] = 'Amanqaku afihliwe';
 $string['grades_posted'] = 'Amanqaku athunyelwe';
 $string['grades_scheduled'] = 'Kuza kuthunyelwa {$a}';

@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Δημοσιεύσεις';
 $string['forum_wordcount'] = '{$a} λέξεις';
 $string['forum_your_posts'] = 'Οι δημοσιεύσεις σας στο φόρουμ';
 $string['grade'] = 'Βαθμός';
+$string['gradecomputedfromquestions'] = 'Υπολογίζεται από τις βαθμολογίες των ερωτήσεων παρακάτω — αλλάξτε τις για να το τροποποιήσετε.';
 $string['grades_hidden'] = 'Οι βαθμοί είναι κρυφοί';
 $string['grades_posted'] = 'Οι βαθμοί δημοσιεύτηκαν';
 $string['grades_scheduled'] = 'Δημοσίευση {$a}';

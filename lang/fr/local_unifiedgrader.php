@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Messages';
 $string['forum_wordcount'] = '{$a} mots';
 $string['forum_your_posts'] = 'Vos messages du forum';
 $string['grade'] = 'Note';
+$string['gradecomputedfromquestions'] = 'Calculé à partir des notes des questions ci-dessous — modifiez-les pour le changer.';
 $string['grades_hidden'] = 'Notes masquées';
 $string['grades_posted'] = 'Notes publiées';
 $string['grades_scheduled'] = 'Publication le {$a}';
