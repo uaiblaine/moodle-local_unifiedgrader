@@ -427,6 +427,78 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * Clearing a grade must not be a silent no-op when the gradebook cell is
+     * overridden.
+     *
+     * Sibling of test_save_grade_persists_when_gradebook_overridden above, and
+     * the two used to disagree. Saving a VALUE under an override works: the
+     * adapter lifts a recoverable override first, so the mark lands. Clearing
+     * did not, and could not - the recovery is deliberately skipped for a pure
+     * clear (lifting an override there would drop a penalty the teacher never
+     * asked to drop), and core then refuses the write itself, because
+     * apply_grade_to_user() wraps it in if (!$gradingdisabled) and
+     * grading_disabled() is true whenever the cell is locked or overridden.
+     *
+     * So the clear reported success and changed nothing - the same silent
+     * failure fixed in v2.8.5, reached by a different route. It now refuses out
+     * loud instead, which is the honest outcome: the teacher is told why, and
+     * the deliberate "--" reset (reset_grade_and_submission) is the path that
+     * does lift the override when that is really what they want.
+     */
+    public function test_clearing_a_grade_is_refused_when_the_gradebook_is_overridden(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/gradelib.php');
+        $this->resetAfterTest();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+
+        $this->setUser($student);
+        $plugingen->create_assign_submission($s->scenario->activity, $student->id);
+        $this->setUser($s->scenario->teacher);
+        $s->adapter->save_grade($student->id, 50.0, '<p>First pass.</p>');
+        $this->assertEquals(
+            50.0,
+            $s->adapter->get_grade_data($student->id)['grade'],
+            'Precondition: there must be a grade to clear.'
+        );
+
+        // Override the gradebook entry - what a late penalty leaves behind.
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $s->scenario->activity->id,
+            'itemnumber' => 0,
+            'courseid' => $s->scenario->course->id,
+        ]);
+        $this->assertNotEmpty($gradeitem);
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id]);
+        $this->assertNotEmpty($gradegrade);
+        $gradegrade->set_overridden(true);
+        $this->assertNotEmpty(
+            \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id])->overridden,
+            'Precondition: the gradebook entry must be overridden.'
+        );
+
+        // Clear through a fresh adapter, as a new request would.
+        $adapter = adapter_factory::create($s->scenario->cm->id);
+        try {
+            $adapter->save_grade($student->id, null, '<p>First pass.</p>');
+            $this->fail('Clearing the grade should have been refused while the gradebook entry is overridden.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('error_grade_clear_blocked_by_gradebook', $e->errorcode);
+        }
+
+        // The refusal has to be truthful: the grade really is still there.
+        $this->assertEquals(
+            50.0,
+            $adapter->get_grade_data($student->id)['grade'],
+            'The refusal must reflect reality - the grade was not cleared.'
+        );
+    }
+
+    /**
      * Test is_grade_released with no grade returns false.
      */
     public function test_is_grade_released_no_grade(): void {
