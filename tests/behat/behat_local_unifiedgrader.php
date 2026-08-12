@@ -557,6 +557,31 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
+     * Assert whether the overall grade box accepts typing.
+     *
+     * Reads the live readOnly property rather than the readonly attribute: the
+     * panel sets the property during render, and the template ships no
+     * attribute, so an attribute check would report every activity as editable.
+     *
+     * @Then /^the overall grade box is (?P<state>read\-only|editable)$/
+     * @param string $state Expected state.
+     */
+    public function the_overall_grade_box_is(string $state): void {
+        $this->execute('behat_general::wait_until_exists', ['[data-action="grade-input"]', 'css_element']);
+        $actual = (bool) $this->evaluate_script(
+            "(document.querySelector('[data-action=\"grade-input\"]') || {}).readOnly === true"
+        );
+        $expected = $state === 'read-only';
+        if ($actual !== $expected) {
+            throw new ExpectationException(
+                'Expected the overall grade box to be ' . $state
+                    . ', found it ' . ($actual ? 'read-only' : 'editable'),
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
      * Set one admin setting, named the way get_config() reads it back.
      *
      * Core ships "the following config values are set as admin:" for a table of

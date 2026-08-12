@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Interventi';
 $string['forum_wordcount'] = '{$a} parole';
 $string['forum_your_posts'] = 'I tuoi interventi nel forum';
 $string['grade'] = 'Voto';
+$string['gradecomputedfromquestions'] = 'Calcolato dai punteggi delle domande qui sotto — modificali per cambiarlo.';
 $string['grades_hidden'] = 'Voti nascosti';
 $string['grades_posted'] = 'Voti pubblicati';
 $string['grades_scheduled'] = 'Pubblicazione {$a}';

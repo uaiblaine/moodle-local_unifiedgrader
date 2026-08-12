@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Publicaciones';
 $string['forum_wordcount'] = '{$a} palabras';
 $string['forum_your_posts'] = 'Sus publicaciones en el foro';
 $string['grade'] = 'Calificación';
+$string['gradecomputedfromquestions'] = 'Calculado a partir de las puntuaciones de las preguntas de abajo — modifíquelas para cambiarlo.';
 $string['grades_hidden'] = 'Calificaciones ocultas';
 $string['grades_posted'] = 'Calificaciones publicadas';
 $string['grades_scheduled'] = 'Publicación {$a}';

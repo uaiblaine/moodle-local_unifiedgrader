@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Publicações';
 $string['forum_wordcount'] = '{$a} palavras';
 $string['forum_your_posts'] = 'As suas publicações no fórum';
 $string['grade'] = 'Nota';
+$string['gradecomputedfromquestions'] = 'Calculado a partir das notas das questões abaixo — altere-as para mudar o total.';
 $string['grades_hidden'] = 'Notas ocultas';
 $string['grades_posted'] = 'Notas publicadas';
 $string['grades_scheduled'] = 'Publicação em {$a}';

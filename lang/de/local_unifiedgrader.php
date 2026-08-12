@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Beiträge';
 $string['forum_wordcount'] = '{$a} Wörter';
 $string['forum_your_posts'] = 'Ihre Forenbeiträge';
 $string['grade'] = 'Bewertung';
+$string['gradecomputedfromquestions'] = 'Wird aus den Fragebewertungen unten berechnet — ändern Sie diese, um sie anzupassen.';
 $string['grades_hidden'] = 'Bewertungen verborgen';
 $string['grades_posted'] = 'Bewertungen veröffentlicht';
 $string['grades_scheduled'] = 'Veröffentlichung {$a}';

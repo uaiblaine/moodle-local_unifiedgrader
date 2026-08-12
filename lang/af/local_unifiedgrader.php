@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Plasings';
 $string['forum_wordcount'] = '{$a} woorde';
 $string['forum_your_posts'] = 'Jou forumplasings';
 $string['grade'] = 'Punt';
+$string['gradecomputedfromquestions'] = 'Bereken uit die vraagpunte hieronder — verander dié om dit te wysig.';
 $string['grades_hidden'] = 'Punte verberg';
 $string['grades_posted'] = 'Punte geplaas';
 $string['grades_scheduled'] = 'Word geplaas op {$a}';

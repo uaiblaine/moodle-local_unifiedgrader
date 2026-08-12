@@ -105,6 +105,12 @@
                         <div data-region="grade-error"
                              class="invalid-feedback d-none small mt-1"
                              role="alert"></div>
+                        {{! Shown for quizzes only, where the total is derived
+                            from the question marks and the box is read-only. }}
+                        <div data-region="grade-computed-hint"
+                             class="form-text d-none small mt-1">
+                            {{#str}} gradecomputedfromquestions, local_unifiedgrader {{/str}}
+                        </div>
                         {{! Override indicator + reset action — visible only
                             when the displayed grade differs from the rubric /
                             marking-guide computed total. }}

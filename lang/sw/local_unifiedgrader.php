@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'Machapisho';
 $string['forum_wordcount'] = 'maneno {$a}';
 $string['forum_your_posts'] = 'Machapisho yako ya majadiliano';
 $string['grade'] = 'Alama';
+$string['gradecomputedfromquestions'] = 'Imekokotolewa kutokana na alama za maswali hapa chini — badilisha alama hizo ili kuibadilisha.';
 $string['grades_hidden'] = 'Alama zimefichwa';
 $string['grades_posted'] = 'Alama zimechapishwa';
 $string['grades_scheduled'] = 'Inachapisha {$a}';

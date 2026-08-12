@@ -182,6 +182,7 @@ $string['forum_tab_posts'] = 'פרסומים';
 $string['forum_wordcount'] = '{$a} מילים';
 $string['forum_your_posts'] = 'הפרסומים שלך בפורום';
 $string['grade'] = 'ציון';
+$string['gradecomputedfromquestions'] = 'מחושב מציוני השאלות שלהלן — שנו אותם כדי לשנות את הציון הכולל.';
 $string['grades_hidden'] = 'הציונים הוסתרו';
 $string['grades_posted'] = 'הציונים פורסמו';
 $string['grades_scheduled'] = 'מפרסם {$a}';

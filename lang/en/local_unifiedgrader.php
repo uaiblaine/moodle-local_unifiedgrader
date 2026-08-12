@@ -275,6 +275,7 @@ $string['grade_overridden'] = 'Overridden';
 $string['grade_override_help'] = 'The displayed grade differs from the rubric/marking-guide computed total. This is an intentional manual override; the rubric scores themselves are unchanged.';
 $string['grade_reset_rubric'] = 'Reset to rubric total';
 $string['grade_rubric_says'] = 'Rubric total:';
+$string['gradecomputedfromquestions'] = 'Calculated from the question marks below — edit those to change it.';
 $string['grades_hidden'] = 'Grades hidden';
 $string['grades_posted'] = 'Grades posted';
 $string['grades_scheduled'] = 'Posting {$a}';
