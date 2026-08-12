@@ -71,21 +71,49 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
-     * Wait for the marking panel to finish its initial render. The panel
-     * is reactive and hydrates after a few AJAX calls, so a brittle
-     * "wait for a fixed selector to appear" is more reliable than a
-     * blanket sleep.
+     * Wait for the marking panel to finish its initial render.
+     *
+     * This has to wait on something the JavaScript PRODUCES, not on an element
+     * the template ships. Both selectors this step used to wait for —
+     * [data-region="rubric-body"] and [data-action="grade-input"] — are static
+     * markup in marking_panel.mustache, present in the very first byte of HTML,
+     * so the wait returned on its first evaluation and proved nothing. Scenarios
+     * only survived because the step after it happened to wait for real.
+     *
+     * The two signals used instead:
+     *
+     *  - the navigator's current-student name, which starts as the literal "--"
+     *    placeholder and is only rewritten once participants and the current
+     *    student have loaded from the server (student_navigator.js
+     *    _renderCurrentStudent). This is the strong one: it cannot be true
+     *    before the reactive state holds server data, and the marking panel's
+     *    own stateReady — which attaches every listener the scenarios depend
+     *    on — runs before that.
+     *  - the grade input's max attribute, which the template does not set and
+     *    _updateMaxGrade stamps on during hydration. Only meaningful when the
+     *    points input is the visible one, so scale-graded and grading-disabled
+     *    activities are exempted rather than made to hang.
      *
      * @Given /^the marking panel has loaded$/
      */
     public function the_marking_panel_has_loaded(): void {
         $this->execute('behat_general::wait_until_the_page_is_ready');
-        // RUBRIC_BODY data-region exists in the DOM once _renderAdvancedGrading
-        // has run — the latest render boundary.
-        $this->execute(
-            'behat_general::wait_until_exists',
-            ['[data-region="rubric-body"], [data-action="grade-input"]', 'css_element'],
-        );
+        $js = "(function(){"
+            . "var n = document.querySelector('[data-region=\"current-student-name\"]');"
+            . "if (!n) { return false; }"
+            . "var name = (n.textContent || '').trim();"
+            . "if (name === '' || name === '--') { return false; }"
+            . "var simple = document.querySelector('[data-region=\"simple-grade\"]');"
+            . "var input = document.querySelector('[data-action=\"grade-input\"]');"
+            . "if (!simple || !input || simple.classList.contains('d-none')) { return true; }"
+            . "return input.hasAttribute('max');"
+            . "})()";
+        if (!$this->getSession()->wait(self::get_timeout() * 1000, $js)) {
+            throw new ExpectationException(
+                'The marking panel did not finish hydrating.',
+                $this->getSession()
+            );
+        }
     }
 
     /**

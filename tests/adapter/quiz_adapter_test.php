@@ -552,4 +552,127 @@ final class quiz_adapter_test extends \advanced_testcase {
         $this->assertArrayHasKey('feedbackhtml', $result);
         $this->assertStringContainsString('Draft test feedback', $result['feedbackhtml']);
     }
+
+    /**
+     * Build a quiz attempt with one manually-graded essay, mark it, and let
+     * mod_quiz compute the overall grade from it.
+     *
+     * Shaped after core's own helper in
+     * mod/quiz/tests/quiz_notify_attempt_manual_grading_completed_test.php,
+     * which is the file that already absorbed the traps here: the attempt has
+     * to be started, submitted and grade-submitted before a manual mark means
+     * anything, quiz_attempts.sumgrades has to be written back from the usage,
+     * and only then does recompute_final_grade() populate quiz_grades.
+     *
+     * @param \stdClass $scenario Scenario from create_grading_scenario('quiz').
+     * @param \stdClass $student The student to build the attempt for.
+     * @param float $mark Mark to award the essay question.
+     */
+    private function build_manually_graded_attempt(\stdClass $scenario, \stdClass $student, float $mark): void {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $cat = $questiongenerator->create_question_category();
+        $essay = $questiongenerator->create_question('essay', null, ['category' => $cat->id]);
+        // Weight 10 so a mark of 6 is in range: manual_grade() takes a MARK, and
+        // the essay generator's default maxmark is 1.
+        quiz_add_quiz_question($essay->id, $scenario->activity, 0, 10);
+
+        $quizobj = \mod_quiz\quiz_settings::create($scenario->activity->id);
+        $quizobj->get_grade_calculator()->recompute_quiz_sumgrades();
+        $quizobj = \mod_quiz\quiz_settings::create($scenario->activity->id);
+
+        $quba = \question_engine::make_questions_usage_by_activity('mod_quiz', $quizobj->get_context());
+        $quba->set_preferred_behaviour($quizobj->get_quiz()->preferredbehaviour);
+
+        $now = time();
+        $attempt = quiz_create_attempt($quizobj, 1, false, $now - HOURSECS, false, $student->id);
+        quiz_start_new_attempt($quizobj, $quba, $attempt, 1, $now - HOURSECS);
+        quiz_attempt_save_started($quizobj, $quba, $attempt);
+
+        $attemptobj = \mod_quiz\quiz_attempt::create($attempt->id);
+        $attemptobj->process_submitted_actions(
+            $now - 30 * MINSECS,
+            false,
+            [1 => ['answer' => 'An essay answer', 'answerformat' => FORMAT_HTML]],
+        );
+        $attemptobj->process_submit($now - 20 * MINSECS, false);
+        $attemptobj->process_grade_submission($now - 10 * MINSECS);
+
+        // Award the manual mark, which is the only sanctioned way to move a
+        // quiz total: mod_quiz derives quiz_grades from the attempt sumgrades.
+        $attemptobj->get_question_usage()->manual_grade(1, 'Marked.', $mark, FORMAT_HTML);
+        \question_engine::save_questions_usage_by_activity($attemptobj->get_question_usage());
+        $DB->update_record('quiz_attempts', (object) [
+            'id' => $attemptobj->get_attemptid(),
+            'timemodified' => $now,
+            'sumgrades' => $attemptobj->get_question_usage()->get_total_mark(),
+        ]);
+        $quizobj->get_grade_calculator()->recompute_final_grade($student->id);
+    }
+
+    /**
+     * A quiz total typed into the marking panel is deliberately NOT persisted.
+     *
+     * quiz_grades is derived state: mod_quiz\grade_calculator rewrites it from
+     * the attempt sumgrades and quiz.grademethod on every recompute, and the
+     * recomputes fire from everywhere - a per-question save, deleting another
+     * attempt, a regrade, a max-grade change, and the update_overdue_attempts
+     * cron task with no human action at all. quiz_grades has no override column
+     * (mod/quiz/db/install.xml even documents the field as "not affected by
+     * overrides in the gradebook"), and core's own manual-grading report offers
+     * per-question marks only, never a total.
+     *
+     * So save_grade() ignoring its $grade argument for quizzes is correct, not
+     * an oversight: honouring it would write a value that survives the request,
+     * passes a manual test, and is then silently reverted by cron hours later -
+     * a worse failure than not accepting it. Teachers move a quiz total by
+     * changing the question marks, which this adapter does persist.
+     *
+     * This test exists so nobody "fixes" the ignored argument later.
+     */
+    public function test_save_grade_does_not_persist_a_typed_quiz_total(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['studentcount' => 1]);
+        $student = $s->scenario->students[0];
+        $this->build_manually_graded_attempt($s->scenario, $student, 6.0);
+        $this->setUser($s->scenario->teacher);
+
+        $before = $DB->get_field('quiz_grades', 'grade', [
+            'quiz' => $s->scenario->activity->id,
+            'userid' => $student->id,
+        ]);
+        $this->assertNotFalse($before, 'Precondition: the attempt must have produced a quiz_grades row.');
+        $this->assertGreaterThan(0, (float) $before, 'Precondition: the computed total must be non-zero.');
+
+        // Save a total deliberately different from the computed one.
+        $result = $s->adapter->save_grade($student->id, 99.0, '<p>Typed marker</p>', FORMAT_HTML, [], 0, 0, 1);
+        $this->assertTrue($result);
+
+        $after = $DB->get_field('quiz_grades', 'grade', [
+            'quiz' => $s->scenario->activity->id,
+            'userid' => $student->id,
+        ]);
+        $this->assertEqualsWithDelta(
+            (float) $before,
+            (float) $after,
+            0.0001,
+            'A typed quiz total must not overwrite the engine-computed grade.'
+        );
+
+        /* Control. Without it the assertion above passes for the wrong reason -
+           it would hold just as well if save_grade() had thrown, or done
+           nothing at all. The feedback proves the call really ran and really
+           did the work it IS responsible for. */
+        $qfb = $DB->get_record('local_unifiedgrader_qfb', [
+            'cmid' => $s->scenario->cm->id,
+            'userid' => $student->id,
+            'attemptnumber' => 1,
+        ]);
+        $this->assertNotEmpty($qfb, 'Control: save_grade must still have stored the feedback.');
+        $this->assertStringContainsString('Typed marker', $qfb->feedback);
+    }
 }

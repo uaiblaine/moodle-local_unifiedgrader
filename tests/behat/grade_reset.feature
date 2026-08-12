@@ -41,11 +41,20 @@ Feature: Dash escape hatches in the overall grade input
   Scenario: Typing a stray non-numeric value also resets without error
     # Regression for the original "lone - throws PARAM_FLOAT exception"
     # bug — any non-numeric input should be normalised to a clean reset.
+    #
+    # A grade is saved first on purpose. Without one this scenario proves almost
+    # nothing: assign_grades starts at -1, so "the grade ends up cleared" holds
+    # whether or not the reset does anything, and the on-screen check only reads
+    # back the value the panel blanked synchronously. That is exactly how the
+    # sibling "-" path stayed broken while looking covered.
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
-    And I enter "x" as the overall grade
+    And I enter "15" as the overall grade
+    Then the saved grade for "student1" on "Essay 1" is "15"
+    When I enter "x" as the overall grade
     Then the overall grade shows ""
     And I should not see "Exception"
+    And the saved grade for "student1" on "Essay 1" is ""
 
   @local_unifiedgrader_wip
   Scenario: Typing "--" removes the orphan submission row too
