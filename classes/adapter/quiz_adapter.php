@@ -1392,6 +1392,10 @@ class quiz_adapter extends base_adapter {
 
         $quba = question_engine::load_questions_usage_by_activity($attempt->uniqueid);
 
+        // Slots actually graded here, so the same events Moodle's own manual
+        // grading page raises can be raised below (see the note after the sync).
+        $gradedslots = [];
+
         foreach ($questions as $slot => $data) {
             $slot = (int) $slot;
             $mark = isset($data['mark']) && $data['mark'] !== '' ? (float) $data['mark'] : null;
@@ -1406,6 +1410,7 @@ class quiz_adapter extends base_adapter {
             if ($mark !== null && $maxmark > 0) {
                 // Mark provided — save both mark and comment.
                 $quba->manual_grade($slot, $comment, $mark, FORMAT_HTML);
+                $gradedslots[$slot] = (int) $qa->get_question_id();
             } else if (!empty($comment)) {
                 // Comment-only update — reuse the existing mark if available.
                 // When $existingmark is null (never graded), manual_grade() with
@@ -1413,6 +1418,7 @@ class quiz_adapter extends base_adapter {
                 // comment-only path (no grade change, state preserved).
                 $existingmark = $qa->get_mark();
                 $quba->manual_grade($slot, $comment, $existingmark, FORMAT_HTML);
+                $gradedslots[$slot] = (int) $qa->get_question_id();
             }
         }
 
@@ -1431,6 +1437,33 @@ class quiz_adapter extends base_adapter {
 
         // Sync to gradebook.
         quiz_update_grades($this->quiz, (int) $attempt->userid);
+
+        // Raise the same event Moodle's own manual grading page raises, once per
+        // question marked. Writing the question usage directly is faster, but it
+        // bypasses the event other plugins listen for — and some of them own
+        // grading behaviour we must not reimplement.
+        //
+        // Concretely: a late-penalty plugin pins the gradebook cell with an
+        // override, which is exactly what stops the quiz module overwriting the
+        // penalised mark. Its listener responds to this event by clearing that
+        // override, letting the new total through, and re-applying the penalty to
+        // it. Without the event the override simply stayed, and everything the
+        // teacher marked here was silently kept out of the gradebook.
+        //
+        // Firing after the gradebook sync means listeners recalculate from the
+        // updated total rather than the stale one.
+        foreach ($gradedslots as $slot => $questionid) {
+            \mod_quiz\event\question_manually_graded::create([
+                'objectid' => $questionid,
+                'courseid' => (int) $this->course->id,
+                'context' => $this->context,
+                'other' => [
+                    'quizid' => (int) $this->quiz->id,
+                    'attemptid' => (int) $attempt->id,
+                    'slot' => $slot,
+                ],
+            ])->trigger();
+        }
     }
 
     /**
@@ -1704,6 +1737,116 @@ class quiz_adapter extends base_adapter {
             }
 
             $gradegrade->update('local/unifiedgrader');
+        }
+    }
+
+    /**
+     * Push this student's penalised quiz mark to the gradebook.
+     *
+     * A quiz mark is computed by the question engine rather than typed, so
+     * until now this adapter inherited the base no-op and a manual penalty on a
+     * quiz - word count, academic integrity - was recorded and displayed in the
+     * grader while reaching no grade at all.
+     *
+     * The deduction cannot simply be written over the gradebook cell, for two
+     * reasons that pull in opposite directions:
+     *
+     * - A late-penalty access rule pins the cell with an override precisely so
+     *   the quiz module cannot overwrite the penalised mark. A write that
+     *   ignores the override is silently discarded.
+     * - But leaving the cell unpinned hands it back to the quiz module, which
+     *   restores the engine total on its next recalculation - a new attempt, a
+     *   regrade, or an edit to the question marks - and the deduction vanishes
+     *   with no trace.
+     *
+     * So the order matters: lift the override, push, then make sure the cell is
+     * pinned again before returning.
+     *
+     * Pushing through quiz_grade_item_update() rather than writing grade_grades
+     * directly is also deliberate. It raises user_graded, which is the event a
+     * late-penalty rule observes, so that rule re-applies its own deduction on
+     * top of ours and re-pins the cell itself. Penalties therefore compound
+     * without this plugin knowing anything about how the late penalty is
+     * calculated - the same division of labour assignments already rely on,
+     * where assign_grade_item_update() ends by calling apply_penalty_to_user().
+     *
+     * The computation is idempotent: it starts from the engine's own stored
+     * total and the current penalty rows every time, never from the previously
+     * synced figure, so running it repeatedly cannot compound the deduction.
+     *
+     * @param int $userid The student user ID.
+     */
+    public function sync_gradebook_penalty(int $userid): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/quiz/lib.php');
+        require_once($CFG->libdir . '/gradelib.php');
+
+        $maxgrade = (float) $this->quiz->grade;
+        if ($maxgrade <= 0) {
+            // No grade column, so a percentage deduction means nothing.
+            return;
+        }
+
+        // The engine's own total. Starting here rather than from the gradebook
+        // value is what keeps repeated calls idempotent.
+        $enginegrade = $DB->get_field('quiz_grades', 'grade', [
+            'quiz' => (int) $this->quiz->id,
+            'userid' => $userid,
+        ]);
+        if ($enginegrade === false || $enginegrade === null) {
+            return;
+        }
+
+        $deduction = \local_unifiedgrader\penalty_manager::get_total_deduction(
+            (int) $this->cm->id,
+            $userid,
+            $maxgrade,
+        );
+        $penalised = max(0, (float) $enginegrade - $deduction);
+
+        $gradeitem = $this->fetch_grade_item();
+        $before = $gradeitem
+            ? \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid])
+            : null;
+
+        // A locked grade is an administrative decision, not ours to undo.
+        if ($before && !empty($before->locked)) {
+            return;
+        }
+
+        // 1. Lift the override, or the write below is discarded.
+        $waspinned = $before && !empty($before->overridden);
+        if ($waspinned) {
+            $before->set_overridden(false, false);
+        }
+
+        // 2. Push. Any late-penalty observer sees user_graded and applies its
+        // own deduction on top of this figure, re-pinning as it does so.
+        $quizrecord = clone $this->quiz;
+        $quizrecord->cmidnumber = $this->cm->idnumber;
+        quiz_grade_item_update($quizrecord, (object) [
+            'userid' => $userid,
+            'rawgrade' => $penalised,
+            'dategraded' => time(),
+            'datesubmitted' => null,
+        ]);
+
+        // 3. Make sure the cell ends up pinned whenever a deduction is in force.
+        // If a late-penalty rule handled step 2 it has already pinned the
+        // cell and this is a no-op; if there is no such rule, this is what
+        // stops the engine reclaiming the mark on its next recalculation.
+        if ($deduction <= 0 || !$gradeitem) {
+            return;
+        }
+        $after = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
+        if ($after && empty($after->overridden) && $after->finalgrade !== null) {
+            $gradeitem->update_final_grade(
+                $userid,
+                (float) $after->finalgrade,
+                'local/unifiedgrader',
+                null,
+                FORMAT_MOODLE,
+            );
         }
     }
 }

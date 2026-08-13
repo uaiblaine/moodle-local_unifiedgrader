@@ -23,7 +23,6 @@
  */
 
 defined('MOODLE_INTERNAL') || die();
-
 $string['action_add_override'] = 'Add override';
 $string['action_clear_overrides'] = 'Clear all overrides';
 $string['action_delete_extension'] = 'Delete extension';
@@ -271,6 +270,25 @@ $string['forum_tab_files'] = 'Annotated Files';
 $string['forum_tab_posts'] = 'Posts';
 $string['forum_wordcount'] = '{$a} words';
 $string['forum_your_posts'] = 'Your forum posts';
+$string['forumview_collapse'] = 'Hide again';
+$string['forumview_collapsed'] = 'Show {$a} hidden post(s)';
+$string['forumview_flat'] = 'All posts';
+$string['forumview_flat_help'] = 'This student\'s posts, one after another.';
+$string['forumview_jump_next'] = 'Next post by this student';
+$string['forumview_label'] = 'Post view';
+$string['forumview_next'] = 'Next post';
+$string['forumview_no_context'] = 'No discussion context is available for this student.';
+$string['forumview_paged'] = 'In context';
+$string['forumview_paged_help'] = 'One post at a time, with the prompt, what it replied to, and the replies it drew.';
+$string['forumview_post_of'] = 'Post {$a->index} of {$a->total}';
+$string['forumview_prev'] = 'Previous post';
+$string['forumview_prompt'] = 'Discussion prompt';
+$string['forumview_replies'] = 'Replies to this post';
+$string['forumview_replying_to'] = 'Replying to';
+$string['forumview_siblings'] = 'Other replies to the same post';
+$string['forumview_this_student'] = 'This student';
+$string['forumview_thread'] = 'Thread';
+$string['forumview_thread_help'] = 'The whole discussion, with this student\'s posts highlighted.';
 $string['grade'] = 'Grade';
 $string['grade_overridden'] = 'Overridden';
 $string['grade_override_help'] = 'The displayed grade differs from the rubric/marking-guide computed total. This is an intentional manual override; the rubric scores themselves are unchanged.';
@@ -441,6 +459,23 @@ $string['quiz_post_grades_disabled'] = 'Post grades is not available for quizzes
 $string['quiz_post_grades_no_schedule'] = 'Scheduling is not available for quizzes. Use Post or Unpost instead.';
 $string['quiz_select_attempt'] = 'Select attempt';
 $string['quiz_your_attempt'] = 'Your Attempt';
+$string['rating_aggregate_of'] = '{$a->value} ({$a->count} ratings)';
+$string['rating_aggregate_one'] = '{$a->value} (1 rating)';
+$string['rating_badge_title'] = '{$a->method} across {$a->count} rating(s)';
+$string['rating_choose'] = 'Rate…';
+$string['rating_feedback_hint'] = 'Ratings are per post. Use the feedback box for an overall comment to the student.';
+$string['rating_gradebook_none'] = '{$a} — nothing rated yet';
+$string['rating_gradebook_note'] = '{$a->label}: {$a->value} → gradebook';
+$string['rating_no_posts'] = 'This student has not posted in the forum, so there is nothing to rate.';
+$string['rating_norate_nocap'] = 'You do not have permission to rate posts in this forum.';
+$string['rating_norate_ownpost'] = 'You cannot rate your own post.';
+$string['rating_norate_window'] = 'This post falls outside the forum\'s rating period.';
+$string['rating_notratingforum'] = 'This forum is not graded by rating posts.';
+$string['rating_progress'] = '{$a->rated} of {$a->posts} posts rated';
+$string['rating_save_failed'] = 'The rating could not be saved.';
+$string['rating_section_title'] = 'Post ratings';
+$string['rating_unrated'] = 'Not yet rated';
+$string['rating_your_rating'] = 'Your rating';
 $string['recalculate_penalty_confirm'] = 'This student has an existing grade with a late penalty. The extension has been saved. Would you like to recalculate the penalty based on the new due date?';
 $string['recalculatepenalty'] = 'Recalculate late penalty';
 $string['recoveredunsavedchanges'] = 'Recovered unsaved changes from your last session.';
