@@ -129,11 +129,29 @@ final class badge_contrast_test extends \basic_testcase {
                      * utility, which sets the background AND a colour chosen for contrast, so
                      * it already satisfies this rule on its own.
                      */
-                    if (!preg_match('/(?<!text-)\b' . preg_quote($background, '/') . '\b/', $line)) {
+                    if (!preg_match('/(?<!text-)\b' . preg_quote($background, '/') . '\b(?!-subtle)/', $line)) {
                         continue;
                     }
                     if (!preg_match('/\btext-(white|dark|body|muted|bg-[a-z]+)\b/', $line)) {
                         $offenders[] = basename($path) . ':' . ($number + 1) . ' needs ' . $required;
+                    }
+                }
+                /*
+                 * Bootstrap 5.3's subtle backgrounds are LIGHT, so the default white
+                 * badge text fails on them exactly as it does on bg-secondary. They
+                 * ship a matching foreground - text-primary-subtle pairs with
+                 * text-primary-emphasis - and that pairing is what makes them legible.
+                 * Excluded from the saturated list above by the (?!-subtle) lookahead,
+                 * because bg-primary-subtle is a different colour from bg-primary and
+                 * wants a different answer, not text-white.
+                 */
+                if (preg_match_all('/\bbg-([a-z]+)-subtle\b/', $line, $subtle)) {
+                    foreach ($subtle[1] as $hue) {
+                        $ok = '/\btext-(' . preg_quote($hue, '/') . '-emphasis|dark|body)\b/';
+                        if (!preg_match($ok, $line)) {
+                            $offenders[] = basename($path) . ':' . ($number + 1)
+                                . ' needs text-' . $hue . '-emphasis';
+                        }
                     }
                 }
             }
