@@ -458,6 +458,13 @@ class behat_local_unifiedgrader extends behat_base {
      * (display visible, editor hidden). The post-save collapse is async (AJAX
      * save + reactive re-render), so this spins rather than checking once.
      *
+     * Extended timeout, not the standard one: this step is used after clicking
+     * save, so it waits on a full server round-trip rather than a DOM tick. The
+     * standard 6s was enough locally and on most CI jobs but timed out on a
+     * loaded runner, failing the scenario three times in a row in one job while
+     * the same commit passed everywhere else. The condition asserted is
+     * unchanged — only the patience for it is.
+     *
      * On failure it reports what it actually saw, because the DOM state it
      * waits for has more than one cause. _toggleFeedbackMode only shows the
      * card when there is feedback AND the panel is not in editing mode, so
@@ -476,7 +483,7 @@ class behat_local_unifiedgrader extends behat_base {
             . "var e=document.querySelector('[data-region=\"feedback-editor-wrapper\"]');"
             . "return !!(d && !d.classList.contains('d-none') && e && e.classList.contains('d-none'));"
             . "})()";
-        if ($this->getSession()->wait(self::get_timeout() * 1000, $js)) {
+        if ($this->getSession()->wait(self::get_extended_timeout() * 1000, $js)) {
             return;
         }
         $observed = (string) $this->evaluate_script(

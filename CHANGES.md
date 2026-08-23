@@ -1,6 +1,185 @@
 # Changelog
 
+## v2.9.4+uai.1 (2026082300)
+
+Merge of the upstream v2.9.2, v2.9.3 and v2.9.4 releases into this fork. Upstream's work is
+BigBlueButton session filtering and attendance, a whole-quiz total while manual questions are being
+marked, and a composer-authentication fix in CI. Every fork fix from v2.8.5 to v2.8.8 survives; the
+notes below record the four places the two trees had to be reconciled by hand, and the one upstream
+defect this fork now inherits.
+
+- **Release numbering now carries a fork suffix.** The fork and upstream had independently published
+  *different* trees under the identical release `2.9.2` and the identical `$plugin->version`
+  `2026081201` — Moodle keys upgrades off that integer, so the two builds were indistinguishable to
+  a site. Neither side had tagged, so nothing was frozen. From here the fork is `+uai.N` on top of
+  the upstream release it carries, which cannot collide again. The earlier fork build is relabelled
+  `v2.9.2+uai.1` in this file.
+- **`$plugin->supported` is kept.** Upstream's `version.php` has no such line; the fork's
+  `[500, 502]` drives both the CI matrix and which dev stacks the plugin mounts on, and taking
+  upstream's file wholesale would have silently dropped it.
+- **The saved-card Behat step takes both sides.** Upstream raised its wait to
+  `get_extended_timeout()` after a loaded runner failed the scenario three times in one job; this
+  fork had replaced the bare failure with a dump of the observed DOM state. The two are orthogonal,
+  so the merged step waits with upstream's patience and reports with this fork's diagnostics. Taking
+  upstream's hunk alone would have been worse than a lost fix: its `if (!wait) { throw }` in front of
+  this fork's diagnostic tail throws on **success**, failing the scenario every time.
+- **`lang/en` is folded, not appended.** Upstream organises the file by section comment; this fork
+  sorts it alphabetically because `moodle.Files.LangFilesOrdering` fails the build on any key out of
+  order. Upstream's 7 new keys and 1 reworded value are merged into the sorted order, and upstream's
+  duplicate `annotate_stamp_cross` is collapsed to one entry.
+- **The AMD bundles are rebuilt, not resolved.** `marking_panel` and `annotation_layer` conflicted in
+  `amd/build`, where neither side's committed output contains both sides' source. Picking either
+  would have shipped half the merge in the only file Moodle actually serves, with the merged
+  `amd/src` looking correct.
+
+### Known issue inherited from upstream
+
+**On a multi-attempt quiz whose grading method is not "last attempt", the live total freezes and a
+spurious "Overridden" badge appears.** Upstream's new whole-quiz figure is derived from the latest
+finished attempt (`quizautomarks`/`quizsummax`/`quizmaxgrade`, from `get_latest_finished_attempt`),
+while the grade it is compared against on a fresh render is the per-user `quiz_grades` row, which
+the quiz computes from its grading method. `grademethod` is not consulted anywhere in
+`quiz_adapter.php`, so under *highest*, *average* or *first* attempt the two numbers legitimately
+disagree, the fresh-render heuristic reads the difference as a teacher's manual override, and
+`refreshComputedGrade` stops updating the readout.
+
+This reproduces on upstream's tree with none of this fork's code, so it is upstream's to fix. It
+lands harder here: v2.8.7 makes the quiz grade box read-only, so there is no longer a field to type
+in to clear the false override. Single-attempt quizzes, and multi-attempt quizzes graded on the last
+attempt, are unaffected.
+
+## v2.9.4 (2026081900)
+
+BigBlueButton grading: the right session, the right video, and attendance you can rely on.
+
+### Action required
+
+**Run "Refresh attendance" once per BigBlueButton activity after upgrading.** The button now sits in the Activity Points card header and is always available. Until it has run, an activity has no record of who was in which session, and the grader will keep showing every session to every student — correctly, because it cannot yet tell an absence from a gap in the data. Sites with many activities can use `php cli/refresh_bbb_engagement.php --courseid=N` (or `--all`) instead.
+
+### The session list now shows only the sessions the student attended
+
+On BigBlueButton the attendance *is* the submission, so a session a student was not in is not theirs to be marked on. The switcher previously listed every recording on the activity for every student. It now lists the sessions that student attended, and a student who attended none is told **"Did not attend"** rather than being shown the whole activity — matching the `nosubmission` status the participant list already gave them.
+
+Three guards keep *"we have no record"* from being rendered as *"they were absent"*. Each fires on its own positive signal rather than on the absence of the student's own rows, which is the same evidence as absence:
+
+- **A recording no one has attendance data for.** Attendance only began being recorded when the analytics callback was enabled, or when the refresh first ran, so earlier recordings have no roster and nobody can be shown to have missed them. Judged per recording, so a site that enabled the callback midway keeps its older sessions visible while newer ones filter properly.
+- **A join log with no summary.** `EVENT_JOIN` carries no recording id, so it is hard evidence of attendance that cannot be attributed to a session.
+- **Attendance that reconciles with no recording at all.** A contradiction rather than an absence — showing every session beats reporting a student who was there as having missed everything.
+
+When a guard fires the pane says so, so an unfiltered list is distinguishable from a filter that never ran. Users who can read site configuration also see the two identifiers that failed to match.
+
+### The player opens on the session being marked
+
+The grader chose the student's session and then told the annotation overlay nothing, and the overlay chooses for itself — from every recording on the activity, landing on whichever sorts first. A student with a single attended session draws no switcher pills, so nothing ever corrected that choice: **the teacher was shown, and could mark, the wrong recording, with nothing on screen to suggest it.** The active recording is now named explicitly.
+
+Where a student attended more than one session, the pane opens on the one they were present longest for, rather than on the aggregate. A student who dropped into a meeting for ten minutes by mistake and did the work in another session is now marked against the session that carries the work; **All sessions** remains one click away for their totals.
+
+### Attendance is read from BigBlueButton's Learning Dashboard
+
+Engagement metrics were scraped from each recording's *statistics* page. On current BigBlueButton builds that page is a React shell — a few hundred bytes with no tables in it — so the parser silently found nothing and recordings acquired no attendance at all. Activity Points went quiet on newer recordings, and, once the session filter arrived, those recordings had no roster to filter against.
+
+Attendance is now read from `learning_dashboard_data.json`, which is where the dashboard itself gets its figures, behind the signed cookies the statistics page sets. Two properties make it the better source rather than merely a working one:
+
+- Participants carry their **Moodle user id**, which mod_bigbluebuttonbn sets when building the join URL. Attendance lands on the right person without matching display names — the weakness of the old path, where a student who joined under a shortened name was recorded against nobody and read as absent.
+- It exists for recordings **already made**, so past sessions back-fill. The analytics callback only ever helps going forward.
+
+The original parser remains as the fallback for recordings still served the older page. The refresh now reports how many recordings were *read*, not merely how many were *found* — a recording that could not be read keeps no attendance, and that difference is the whole diagnosis when filtering looks wrong.
+
+Attendance is also read from both the summary logs and the cached rows, rather than whichever source the metrics tiles happen to prefer. The two identify a session differently — cached rows are stamped with the recording id by the refresh as it walks each recording, while the logs carry whatever the server put in `recordid` — so reading only the preferred source compared two different id spaces, and every recording could look attended by nobody.
+
+### Recordings would not play when the teacher's group did not match
+
+On an activity with separate or visible groups, the player could refuse to play a recording the grader had just listed, showing *"The recording was not found."* and the group-selection notice over the BigBlueButton activity page inside the preview pane. BigBlueButton builds its playback links without a group, so `bbb_view.php` resolves one from the teacher's *sticky* active group — the group they last picked from a group menu anywhere in that course. When that group is not the recording's, the recording is filtered out of the very list the player checks, and playback bounces to the activity page.
+
+Every playback link now states the recording's own group, so the session on screen is the session that plays, whatever group the teacher last looked at. The companion fix in `bbbext_advgrd` v0.4.1 does the same for the annotation overlay's player. Teachers on an unpatched site can clear the stuck selection by opening the activity and setting its group menu to **All participants**.
+
+### Also
+
+- `cli/refresh_bbb_engagement.php` back-fills attendance for a single activity, a course, or the whole site, and reports recordings that yielded nothing.
+- **Activity Score is no longer available.** The 0–10 figure came from the old statistics page and has no equivalent in the Learning Dashboard, which shows `N/A` for it too.
+
+## v2.9.3 (2026081700)
+
+- **A quiz being marked now shows the whole quiz total, not just the manual questions.** The grading pane lists only the manually-marked questions, which is intended; the grade beside it is supposed to be the whole quiz. While a student was being marked it showed the manual marks alone, and only corrected itself once the teacher navigated away and back. The pane computed the grade as *the stored quiz grade, adjusted by the change in manual marks* — and there is no stored quiz grade for precisely these students: `question_usage_by_activity::get_total_mark()` returns null while any question sits in `needsgrading`, so the attempt's `sumgrades` and its `quiz_grades` row are null until the last manual question is marked. The base was therefore zero for every student in the queue. Saving makes the question engine compute the real total, which is what the return trip was displaying. v2.9.2 fixed the same symptom for the moment *after* a save; this is the case during marking, before one.
+- **A quiz mark entered in the grader now moves the displayed grade by the right amount.** The adjustment above was in raw question marks but was added to a grade on the quiz's own scale, so on any quiz whose raw total differs from its maximum grade — a quiz out of 46.5 raw marks graded out of 100, say — each mark typed moved the figure by the wrong amount, even for a student who did have a stored grade. The pane now computes the grade the same way the quiz module does: *(marks already earned on the other questions + the manual marks entered here) ÷ raw total × maximum grade*, from figures the adapter sends with the marking guide. Scale-graded quizzes keep the previous behaviour, that arithmetic having no meaning for a scale item. Only the displayed figure was ever affected — the mark stored on save has always been the question engine's own, so no recorded grade is wrong and nothing needs re-saving.
+- Coverage in `tests/adapter/quiz_manual_grade_display_test.php`: that the marking guide carries the auto-marked total and the grade scale for an attempt with no stored grade, and that the running total the pane displays is what the quiz module stores once the save completes.
+
 ## v2.9.2 (2026081201)
+
+First public release since v2.7.2. Versions 2.8.0, 2.8.1, 2.9.0 and 2.9.1 were built but never released, so everything below describes the change from **v2.7.2**.
+
+Two substantial additions — **rating-based forum grading** and a **dual file view** — alongside a group of penalty fixes that affect grades already recorded on your site. **Some existing grades are wrong and are not corrected automatically**; see *Action required* below.
+
+### Action required
+
+A penalty recorded in the Unified Grader — a word-count deduction, or the outcome of an academic integrity review — was always shown correctly in the grader, but did not always reach the gradebook. Four separate paths were affected:
+
+- **A penalty recorded after the grade was issued never reached the gradebook.** This is the ordinary case for an integrity outcome decided weeks after marking: nothing saves the grade again afterwards, so nothing recalculated. The grader displayed the reduction, and the gradebook quietly kept the original mark.
+- **Removing a penalty never restored the mark**, so a deduction lifted on appeal stayed in place.
+- **On quizzes and BigBlueButton sessions, manual penalties never applied at all**, in either order.
+- **On assignments, a penalty applied after marking could inflate the mark** instead of reducing it — a 6/12 with a 100% plagiarism penalty redisplayed as **18/12**, and grew again on each save. A penalty large enough to clamp the mark to zero destroyed it outright.
+
+Where a penalty was recorded *while* marking and the grade saved moments later, the deduction carried through, and those grades are correct. That is why the fault looked intermittent rather than systematic, and why it went unnoticed for so long.
+
+**To find affected students,** compare the grader's "final grade after penalties" against the gradebook column; the gradebook mark will be the higher of the two. **Re-saving the grade through the Unified Grader corrects it,** because the save now recalculates from the raw mark and the current penalty rows.
+
+Two caveats when working through them. On assignments, a mark saved under the old model was stored *already reduced*, so it is not always possible to tell from the stored figure alone whether it is a raw mark or a penalised one — the grader is the reliable reference. On BigBlueButton the same is true, though that activity type is unlikely to have any affected grades yet.
+
+Late penalties were unaffected throughout. Where a late penalty and a manual penalty both apply they now accumulate correctly, on assignments, forums, quizzes and BigBlueButton sessions alike.
+
+### New features
+
+- **Rating-graded forums are now supported.** Moodle forums carry two independent grading systems: *whole forum grading* (one mark per student, stored in `forum_grades` on gradebook `itemnumber 1`) and *ratings* (a mark per **post**, stored in `{rating}`, with the gradebook value computed by aggregating every rating on every post the student wrote, on `itemnumber 0`). Only the first was implemented. A rating-only forum opened in the grader and *looked* like it worked — the teacher could type a grade, it was written to a `forum_grades` row on an `itemnumber 1` item that for such a forum has grade type *None*, and nothing ever reached the gradebook. A silent wrong answer rather than an error. The adapter now resolves one of three modes up front — `whole`, `rating`, `none` — and whole-forum grading takes precedence when a forum has both configured, so no forum that works today changes behaviour.
+- **A Post ratings section replaces the grade box on rated forums.** One row per post, a rated-so-far counter, and the figure the gradebook will get with the aggregation method named ("Average of ratings", "Sum of ratings", …) so a bare number is never presented without saying where it came from. Each row shows **two different numbers on purpose**: the dropdown holds *your* rating, the figure beside it is the aggregate across every marker who has rated that post — a colleague marking the same forum moves the aggregate without touching your choice. Rows core will not let you rate (your own post, a post outside the forum's rating window, no capability) are disabled with the reason shown, rather than letting a teacher pick a value that then bounces. Choosing *Rate…* withdraws your rating rather than scoring zero.
+- **Posts are rated where they are read.** In the *In context* and *Thread* views, each of the student's own post cards carries a rating dropdown in its footer alongside the current aggregate — so a teacher rates the post with it in front of them rather than matching a separate list against what they just finished reading. (*All posts* renders through a server-side iframe, so there the marking-panel list is the control.) Both controls dispatch the same mutation and share one state field, so rating from either updates the other and the running total without a reload.
+- **Three ways to read a student's posts.** A rating is a judgement about *one post*, and a reply is frequently unintelligible without what it replied to — the flat list that serves whole-forum grading is the wrong instrument for it. A *Post view* switch above the preview offers **All posts** (the existing flat list, unchanged), **In context** (one post at a time with the discussion prompt, the post it replied to, the sibling replies to that same post, and the replies it drew, with a prev/next pager), and **Thread** (the whole discussion in reading order with the student's posts highlighted, long runs of unrelated posts folded away). Siblings earn their place: they are how a marker tells whether a contribution added something or restated a classmate. All three read from a single payload fetched with the student, so switching mode or turning a page costs no round trip. The choice is remembered per teacher, per forum; rated forums default to *In context*, everything else to *All posts*. Offered for whole-forum forums too — thread context helps there as well. Clicking a rating row moves the preview to that post, and clicking a post in the context views highlights its row.
+- **Students see their ratings and an overall comment.** Each post in the student's feedback view carries a read-only rating badge, and the grade block names the aggregation method so a student rated on five separate posts can see the figure is an average rather than a mark somebody typed. Moodle has no field for a comment on an individual rating, so written feedback is per student. The badge is rendered server-side into the post card, so the same markup serves the teacher's preview, the student's feedback view and the feedback PDF. The context views are marker-only: a student's feedback page shows their own posts alone.
+- **Dual file view (two submissions at once).** A new toggle in the layout controls splits the preview into two stacked panes with a draggable divider, so a teacher can watch a recorded speech while marking its manuscript. Stacked rather than side by side deliberately: each pane keeps the full pane width, so the comment margin is not squeezed out of the document. The divider drags to trade height between the panes (double-click resets, arrow keys nudge it when focused), letting the video be shrunk to give the manuscript as much room as possible. Each pane has its **own file chooser**, which is how submissions with more than two attachments are handled — any two sources can be paired, rather than being fixed to the first and second. The toggle only appears when there are at least two previewable sources, and composes with the existing Split / Preview-only / Grading-only layouts rather than replacing one of them.
+- **Marking follows the focused pane.** Both panes can hold real, clickable documents, so exactly one is active at a time — shown by a "Marking here" badge and a ring around the pane. Clicks and text selections in the other pane cannot place a mark, so a stray click while scrolling for reference can never drop a comment into the wrong document. The same guard applies to the pen and shape tools.
+- **A recording embedded in online text works as a pane source.** A clip recorded with the TinyMCE recorder lives inside the submission's online text, not in a file, so submission content is offered as a pane source in its own right. The text renders inline in the pane, so the recording plays and the words stay annotatable, and embedded media is sized to the pane and rescales as the divider moves.
+- **File type icons on the submission tabs.** Each file pill now carries an icon for its kind — video, audio, Word, PDF, spreadsheet, presentation, or a generic document — so with several attachments the teacher scans for the *kind* of file rather than reading filenames.
+- **Free-floating tick and cross stamps.** The shape dropdown gains a tick and a cross placed at a click rather than bound to text. The text-anchored marks cover commenting on wording, but a cover page, diagram or signature block has no text to anchor to — these fill that gap. They move, undo and flatten into the downloadable PDF like the other drawn annotations.
+
+### Fixes
+
+- **Penalties recorded in the grader now reach the gradebook on every path.** `save_penalty` and `delete_penalty` wrote their row and returned without syncing, so a deduction only reached the gradebook if something else happened to save the grade afterwards. Both endpoints now sync, and the sync recomputes from the activity's raw mark and the current penalty rows on every call rather than adjusting the previously synced figure, so running it from the penalty path as well as the grade path cannot deduct twice. Removing a student's last penalty now restores the mark; the assignment sync previously returned early on a zero deduction, so nothing ever wrote the restored figure back.
+- **Assignments and BigBlueButton sessions now store the raw mark.** Both previously stored the *already reduced* grade and reconstructed the typed mark by adding the deduction back — a round trip that is only sound while the stored grade was saved under the very same penalties it is being un-deducted against. It failed in two ordinary situations: a penalty applied after the work was marked, which inflated the field, and a penalty large enough to clamp the grade to zero, which destroyed the mark outright. Both now keep the mark the marker gave and apply the deduction only on the way to the gradebook, so the field shows exactly what was entered.
+- **Manual penalties now apply to quizzes.** A quiz mark is computed by the question engine rather than typed, so a word-count or integrity penalty reached no grade at all while the grader displayed it as though it had. The penalised figure is now pushed through `quiz_grade_item_update()`, which raises `user_graded` — the event a late-penalty access rule observes — so that rule re-applies its own deduction on top and the two compound, without this plugin needing to know how the late penalty is calculated. Because such a rule pins the gradebook cell with an override to stop the quiz module overwriting it, the sync lifts the override, writes, and makes sure the cell is pinned again before returning.
+- **Manual penalties now apply to BigBlueButton sessions**, including those marked with a rubric through `bbbext_advgrd`, which never applied a deduction at all. BBB has no grades table of its own, so the gradebook row is the only storage there is; the adapter now splits it by intent, with `rawgrade` holding the mark the marker gave and `finalgrade` holding that mark minus the current penalties.
+- **Typing `-` to clear an assignment grade now persists.** The field went blank and the previous mark returned on the next page load, because `assign::apply_grade_to_user()` guards its write with `isset($formdata->grade)` and `isset()` is false for null, so the clear was silently dropped.
+- **Typing `--` to clear a gradebook override now works on quizzes and BigBlueButton activities.** The reset reported success and changed nothing, so the override had to be cleared by hand in the gradebook.
+- **A quiz total now updates in the grade field as soon as it is saved.** After marking the manual questions the teacher had to navigate to another student and back before the new total appeared.
+- **Quiz marks entered in the grader now reach the gradebook when a late penalty is in force.** Once a late-penalty rule has run the gradebook cell is left overridden — deliberately, since that flag is what stops the quiz module recomputing the mark and wiping the penalty — but it equally blocked the new total after the manual questions were marked, so everything the teacher entered was silently kept out of the gradebook until someone unticked the override by hand. The grader now raises `\mod_quiz\event\question_manually_graded`, which the rule plugin already listens for; clearing the override, recalculating and re-applying all stay with the plugin that set the penalty, so the two cannot drift apart.
+- **A manual penalty on a scale-graded forum no longer subtracts percentage points from a scale index.** A negative `grade_forum` is a scale id, not a maximum, and was being treated as "no maximum" with a fallback of 100 — so a deduction computed against a notional 100-point scale was applied to a value like `3` on a four-item scale.
+- **A scale grade is no longer shown to students as a fraction and a percentage.** A scale-graded forum rendered as `3 / 4 (75%)` instead of the scale label. Scale values now render as their label, with no invented denominator or percentage.
+- **Undo now works for comment markers, highlight boxes and stamps.** Those three creation paths registered the mark on their own page but never in the toolbar's undo timeline, so a misplaced one had no way back short of clearing every annotation on the submission. Pen strokes, shapes and arrows were unaffected.
+- **The toolbar's delete button now removes a selected shape.** The Delete key searched every page for the selection, but the toolbars acted on a single bound layer that followed only the page scrolled into view — so a shape selected anywhere else left the button disabled and its clicks doing nothing. Selecting a shape now makes its page the active one for the toolbars.
+- **A plagiarism plugin's JavaScript is no longer printed into the student's feedback PDF.** The plagiarism section reduced the plugin's HTML to text with `strip_tags()`, which removes the tags but keeps the text *between* them, so an inline helper shipped alongside the scores was typeset verbatim into the student's feedback. `<script>` and `<style>` blocks are now dropped with their contents, including an unclosed `<script>`, which would otherwise have leaked everything following it. The same gap is closed in the overall-feedback path. The real scores are unaffected.
+
+### Notes
+
+- **Penalties and extensions are deliberately hidden on rated forums.** The gradebook value belongs to core and is recomputed from the ratings on every change, so a deduction would either be overwritten by the next rating or stick as a gradebook override that quietly stops matching the ratings it claims to represent. This mirrors the treatment scale-graded forums already receive.
+- **Advanced grading is not offered on rated forums** — core supports rubrics and marking guides on the whole-forum item only.
+- **A student counts as graded only once every post they wrote has been rated**, so a half-marked student stays under *Needs grading* rather than needing a new status to describe them.
+- **A deliberate reset withdraws only the current marker's ratings.** Another marker's ratings are their judgement to withdraw, and a student's posts are never the teacher's to delete.
+- **Withdrawing the last rating clears the gradebook cell.** Core's own path deletes the rating but leaves the grade it produced, because `rating_manager::get_user_grades()` omits users who now have no ratings and `grade_update()` early-returns on an empty array. The clear path now pushes an explicit null `rawgrade` instead.
+- **Written feedback survives a rating change.** `grade_update()` builds its grade arrays without a `feedback` key, so `grade_item::update_raw_grade()` leaves stored feedback alone — load-bearing enough to be a test rather than a comment.
+- New web services `local_unifiedgrader_get_post_ratings`, `local_unifiedgrader_save_post_rating` and `local_unifiedgrader_get_post_context`. No new database tables.
+- The 42 new interface strings are English-only. The plugin's other twelve locales already carry 361 of 600 strings and fall back to English for the remainder; adding machine-guessed translations for terms of art in twelve languages would be worse than the fallback.
+
+### Test infrastructure
+
+- **The Behat suite had never run, and reported success on every build.** `tests/behat/behat_local_unifiedgrader.php` opened with `defined('MOODLE_INTERNAL') || die();`. Behat loads context classes while building its suite list, before `config.php`, so `MOODLE_INTERNAL` was undefined and the guard fired; a bare `die()` exits with status **0** and prints nothing, so the runner saw a clean exit. One bad context file takes the whole run down, so all eight feature files were affected. Core's own context classes carry an explanatory comment in place of this guard for exactly this reason. With the process alive, three further defects surfaced in sequence, each hidden by the previous one — a missing `unescape_argument()`, seven assertions passing a CSS selector to a step that resolves by label, and a step that returned without waiting for the autosave it triggers. Fixing the last of these is what exposed the `-` clearing bug above.
+- **A grade and penalty matrix**, in `tests/penalty_matrix_test.php`: 35 tests across assignments, forums, quizzes and BigBlueButton sessions, covering a plain grade, a manual penalty, a late penalty, both together, penalties applied before and after marking, repeated saves and repeated syncs, removal, a cleared grade with a penalty still recorded, locked and scale-graded activities, and the gradebook override lifecycle. Several pin the *route* rather than the arithmetic — writing `grade_grades` directly instead of going through the module API would skip the late-penalty hook and silently drop every late penalty on the course.
+- Adapter coverage for the new forum work in `tests/adapter/forum_rating_helper_test.php` (13 tests) and `tests/adapter/forum_context_builder_test.php` (8 tests), plus `tests/reset_override_test.php`, `tests/adapter/quiz_manual_grading_event_test.php`, `tests/penalty_roundtrip_test.php` and `tests/pdf/pdf_text_test.php`.
+- Scenarios written against step definitions that were never implemented are tagged `@local_unifiedgrader_wip` and excluded in CI; the remainder run for real on every build.
+
+## v2.9.2+uai.1 (fork build, 2026081201)
+
+> Numbering note: this fork build and upstream's own v2.9.2 were produced independently and
+> collided on both the release string and the version integer `2026081201`. Upstream's v2.9.2
+> is documented above; the fork build is described here. From v2.9.4+uai.1 onward the fork
+> carries a `+uai.N` suffix, so the two numbering lines can never collide again.
 
 Merge of the upstream v2.9.0 and v2.9.1 releases into this fork. Both trees had independently found the same silent Behat failure and worked outwards from it, so several fixes arrived twice by different routes; the notes below record which survived and why.
 

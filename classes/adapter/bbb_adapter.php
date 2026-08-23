@@ -177,7 +177,11 @@ class bbb_adapter extends base_adapter {
             $usergrade = $grades[$userid] ?? null;
 
             $hasattended = $stats && (int) $stats->sessioncount > 0;
-            $hasgrade = $usergrade && $usergrade->finalgrade !== null;
+            // The teacher's mark, matching what assign and quiz list here — both
+            // read their activity's own stored grade rather than the penalised
+            // gradebook figure. See sync_gradebook_penalty() for the split.
+            $usergradevalue = $usergrade ? ($usergrade->rawgrade ?? $usergrade->finalgrade) : null;
+            $hasgrade = $usergradevalue !== null;
 
             if ($hasgrade) {
                 $status = 'graded';
@@ -198,7 +202,7 @@ class bbb_adapter extends base_adapter {
                 'profileimageurl' => $profileimageurl,
                 'status' => $status,
                 'submittedat' => $stats ? (int) $stats->lastattended : 0,
-                'gradevalue' => $hasgrade ? (float) $usergrade->finalgrade : null,
+                'gradevalue' => $hasgrade ? (float) $usergradevalue : null,
                 'locked' => false,
                 'hasoverride' => false,
                 'hasextension' => false,
@@ -270,6 +274,28 @@ class bbb_adapter extends base_adapter {
             ],
         );
         $hasattended = $hasjoined || $activitypoints['sessioncount'] > 0;
+
+        // The pills are scoped to the sessions this student actually attended.
+        // On BBB the attendance *is* the submission, so a session they were not
+        // in is not theirs to be marked on. filter_to_attended_recordings()
+        // carries the guards that stop a missing roster reading as absence.
+        $allrecordings = $recordings;
+        $filtered = $this->filter_to_attended_recordings(
+            $recordings,
+            $activitypoints['sessions'],
+            $userid,
+            $hasjoined,
+        );
+        $recordings = $filtered['recordings'];
+        // Why the filter stood down, if it did. Surfaced in the pane so a teacher
+        // is not left wondering why a student they know was absent still shows
+        // every session, and so the id mismatch behind it is visible to an admin
+        // without a database query.
+        $filterreason = $filtered['reason'];
+        // Everything filtered out: the student attended none of the sessions.
+        // Kept distinct from "this activity has no recordings at all" so the
+        // template can say which of the two it is.
+        $didnotattendsessions = !empty($allrecordings) && empty($recordings);
         $hasrecordings = !empty($recordings);
 
         // Recording switcher selection. The top-of-pane pills reload this preview
@@ -315,6 +341,25 @@ class bbb_adapter extends base_adapter {
                 }
             }
         }
+        // No explicit pick: open on the session the student was present longest
+        // for. "All sessions" is an aggregate, and defaulting to it meant the
+        // player loaded whichever recording happened to sort first — which for a
+        // student who dropped into a session for ten minutes by mistake is the
+        // wrong video to be marking. The longest attendance is the session that
+        // carries the work, so it is the one to land on; the totals stay one
+        // click away on the "All sessions" pill.
+        if ($selectedrecordingid === '' && $hasrecordings) {
+            $longestref = $this->get_longest_attended_ref($userid, $activitypoints['sessions']);
+            foreach ($recordings as $i => $rec) {
+                if ($longestref !== '' && (string) $rec['bbbrecordingid'] === $longestref) {
+                    $activeindex = $i;
+                    $isaggregate = false;
+                    $selectedrecordingid = $longestref;
+                    break;
+                }
+            }
+        }
+
         // Flag the active recording so its switcher pill renders selected
         // server-side (correct highlight on first paint, no JS required).
         foreach ($recordings as $i => $rec) {
@@ -395,10 +440,21 @@ class bbb_adapter extends base_adapter {
         if ($hasrecordings && file_exists($advgrdlib)) {
             require_once($advgrdlib);
             if (function_exists('bbbext_advgrd_render_overlay')) {
+                // Always name the recording, even in the aggregate view. Passing
+                // null lets the overlay choose for itself, and it chooses from
+                // every recording on the activity rather than the ones this
+                // student attended — landing on the activity's first recording.
+                // A student with a single attended session renders no switcher
+                // pills, so nothing would ever correct that choice and the
+                // teacher would mark the wrong video with no way to tell.
+                $overlayrecordingid = $selectedrecordingid;
+                if ($overlayrecordingid === '' && $hasrecordings) {
+                    $overlayrecordingid = (string) $recordings[$activeindex]['bbbrecordingid'];
+                }
                 $overlay = bbbext_advgrd_render_overlay(
                     (int) $this->cm->id,
                     $userid,
-                    $selectedrecordingid !== '' ? $selectedrecordingid : null,
+                    $overlayrecordingid !== '' ? $overlayrecordingid : null,
                 );
                 if ($overlay !== null) {
                     $overlayhtml = $overlay;
@@ -421,6 +477,17 @@ class bbb_adapter extends base_adapter {
             'callbackenabled' => $callbackenabled,
             'cansiteconfig' => $cansiteconfig,
             'bbbsettingsurl' => $bbbsettingsurl,
+            'didnotattendsessions' => $didnotattendsessions,
+            'filternotice' => $filterreason !== ''
+                ? get_string('bbb_filter_' . $filterreason, 'local_unifiedgrader')
+                : '',
+            'hasfilternotice' => $filterreason !== '',
+            'filterdiagnostic' => ($filterreason === 'unreconciled' && $cansiteconfig)
+                ? get_string('bbb_filter_iddiagnostic', 'local_unifiedgrader', (object) [
+                    'sessionref' => s($filtered['sessionref']),
+                    'recordingref' => s($filtered['recordingref']),
+                ])
+                : '',
             'statisticslinks' => $statisticsentries,
             'hasstatisticslinks' => !empty($statisticsentries),
             'singlestatisticsurl' => count($statisticsentries) === 1 ? $statisticsentries[0]['url'] : '',
@@ -476,9 +543,15 @@ class bbb_adapter extends base_adapter {
         if ($gradeitem) {
             $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
             if ($gradegrade) {
-                if ($gradegrade->finalgrade !== null) {
+                // Show the mark the teacher gave, not the penalised gradebook
+                // figure. sync_gradebook_penalty() keeps rawgrade holding the
+                // former and finalgrade the latter; reading finalgrade here is
+                // what let a re-save deduct a second time from an already
+                // reduced mark. Fall back for rows predating that split.
+                $storedgrade = $gradegrade->rawgrade ?? $gradegrade->finalgrade;
+                if ($storedgrade !== null) {
                     $hasgrade = true;
-                    $gradevalue = (float) $gradegrade->finalgrade;
+                    $gradevalue = (float) $storedgrade;
                 }
                 if (!empty($gradegrade->feedback)) {
                     $feedbacktext = file_rewrite_pluginfile_urls(
@@ -514,6 +587,124 @@ class bbb_adapter extends base_adapter {
             'timegraded' => $timegraded,
             'grader' => $grader,
         ];
+    }
+
+    /**
+     * Push this student's penalised mark to the gradebook.
+     *
+     * BigBlueButton has no grades table of its own — bigbluebuttonbn_update_grades()
+     * says as much, and bigbluebuttonbn_grade_item_update() writes straight to the
+     * gradebook. That is why this activity was left on the old model where the
+     * already-reduced mark was stored, and it carried every fault assignments were
+     * moved off raw storage to escape: a penalty added after grading never reached
+     * the gradebook, removing one never restored the mark, and re-saving deducted a
+     * second time from a figure that had already been reduced.
+     *
+     * The raw mark does have a home, though. grade_grades.rawgrade is written even
+     * when the cell is overridden — grade_item::update_raw_grade() guards only
+     * finalgrade behind the override check, and refuses outright only on a locked
+     * grade. So this adapter splits the two columns by intent:
+     *
+     * - rawgrade holds what the teacher typed (or what the rubric scored), written
+     *   by save_grade() through the module's own grade_item_update().
+     * - finalgrade holds rawgrade minus the current penalties, written only here.
+     *
+     * Which is why this pushes finalgrade directly rather than re-entering
+     * bigbluebuttonbn_grade_item_update() the way the quiz adapter does. That call
+     * would set rawgrade to the penalised figure, and the next sync would deduct
+     * from an already-reduced mark — the very compounding this replaces. Starting
+     * from rawgrade and the current penalty rows on every call is what keeps
+     * repeated syncs idempotent.
+     *
+     * Both grading routes converge here: the simple path and bbbext_advgrd's
+     * record_grade() both push their score through bigbluebuttonbn_grade_item_update(),
+     * so rawgrade holds the un-penalised mark either way and the rubric path needs
+     * no special case.
+     *
+     * @param int $userid The student user ID.
+     */
+    public function sync_gradebook_penalty(int $userid): void {
+        $maxgrade = (float) $this->bbb->grade;
+        if ($maxgrade <= 0) {
+            // Grade type "none", or a scale — where deducting a percentage would
+            // subtract from a scale index and mean nothing.
+            return;
+        }
+
+        $gradeitem = $this->fetch_grade_item();
+        if (!$gradeitem) {
+            return;
+        }
+
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
+        if (!$gradegrade) {
+            return;
+        }
+
+        // A locked grade is an administrative decision, not ours to undo.
+        if (!empty($gradegrade->locked)) {
+            return;
+        }
+
+        // The teacher's own mark. Deliberately NOT falling back to finalgrade:
+        // once a penalty has pinned the cell, a cleared grade leaves rawgrade
+        // null while finalgrade still holds the old penalised figure, and reading
+        // that back would resurrect the mark the teacher just removed.
+        $raw = $gradegrade->rawgrade;
+
+        $deduction = \local_unifiedgrader\penalty_manager::get_total_deduction(
+            (int) $this->cm->id,
+            $userid,
+            $maxgrade,
+        );
+        $ispinned = !empty($gradegrade->overridden);
+
+        if ($deduction <= 0 && !$ispinned) {
+            // Nothing to deduct and no pin of ours to release. Leaving the cell
+            // untouched here is what keeps a grade set straight in the gradebook
+            // by an administrator from being quietly overwritten.
+            return;
+        }
+
+        if ($raw !== null && $deduction > 0) {
+            // Pin the reduced figure. update_final_grade() sets overridden, which
+            // is what stops the module reclaiming the cell on its next update.
+            //
+            // The feedback argument must be false, not null: update_final_grade()
+            // treats anything other than false as "here is new feedback" and
+            // writes it, so null erases the marker's comment. BBB keeps its
+            // feedback in this very row, so passing null wiped the comment every
+            // time a penalty was synced.
+            $gradeitem->update_final_grade(
+                $userid,
+                max(0, (float) $raw - $deduction),
+                'local/unifiedgrader',
+                false,
+            );
+            return;
+        }
+
+        // Either the last penalty has just been removed, or the grade itself was
+        // cleared while a penalty remained. Both mean the cell should follow the
+        // raw mark again — including when that mark is now null, which is how a
+        // cleared grade reaches the gradebook instead of leaving the last
+        // penalised figure stranded there.
+        //
+        // Refresh is suppressed on the un-pin because the push below is the
+        // deterministic version of the recompute it would trigger.
+        if ($ispinned) {
+            $gradegrade->set_overridden(false, false);
+        }
+
+        $bbb = clone $this->bbb;
+        $bbb->cmidnumber = $this->cm->idnumber;
+        bigbluebuttonbn_grade_item_update($bbb, (object) [
+            'userid' => $userid,
+            'rawgrade' => $raw === null ? null : (float) $raw,
+            'usermodified' => (int) $gradegrade->usermodified,
+            'datesubmitted' => 0,
+            'dategraded' => (int) ($gradegrade->timemodified ?: time()),
+        ]);
     }
 
     /**
@@ -1070,6 +1261,259 @@ class bbb_adapter extends base_adapter {
     }
 
     /**
+     * Narrow the recording list to the sessions $userid actually attended.
+     *
+     * Attendance is what a BBB submission is, so a teacher marking a student
+     * should be shown that student's sessions and not the whole activity's.
+     * The per-session attendance rows come from EVENT_SUMMARY logs (or the
+     * scraped cache) and carry the BBB recording id, so the join is exact.
+     *
+     * Two guards keep "we have no record" from being rendered as "they were
+     * absent". Each fires on its own positive signal rather than on the absence
+     * of this student's rows — which is the same evidence as absence, and would
+     * make the filter contradict itself:
+     *
+     * 1. A recording no one has attendance data for. Attendance only started
+     *    being recorded when the analytics callback was switched on (or the
+     *    scrape first ran), so earlier recordings have no roster at all and
+     *    nobody can be shown to have missed them. Judged per recording, not per
+     *    student, so a site that enabled the callback midway keeps its older
+     *    sessions visible while newer ones filter properly.
+     * 2. A join log with no summary. EVENT_JOIN is written when the student
+     *    clicks Join and carries no recording id, so it is hard evidence of
+     *    attendance that cannot be attributed to a session. This also covers a
+     *    summary whose meta arrived without a recordid: sessions exist but none
+     *    resolves, and guessing would be worse than showing everything.
+     *
+     * Recordings carrying annotation feedback for this student are always kept
+     * — feedback addressed to them must stay reachable however they came by it.
+     *
+     * @param array $recordings Entries from get_recordings_for_user().
+     * @param array $sessions Engagement sessions for this user (each has 'recordingref').
+     * @param int $userid
+     * @param bool $hasjoined Whether the user has a join or summary log for this activity.
+     * @return array The kept subset, in the order given.
+     */
+    private function filter_to_attended_recordings(
+        array $recordings,
+        array $sessions,
+        int $userid,
+        bool $hasjoined
+    ): array {
+        $attendedrefs = $this->get_attended_recording_refs($userid, $sessions);
+
+        // Guard 2 — present, but not attributable to any session.
+        if (empty($attendedrefs) && $hasjoined) {
+            return [
+                'recordings' => $recordings,
+                'reason' => 'noattribution',
+                'sessionref' => '',
+                'recordingref' => (string) ($recordings[0]['bbbrecordingid'] ?? ''),
+            ];
+        }
+
+        $rostered = $this->get_recordings_with_attendance_data();
+        $feedbackrefs = array_flip($this->get_feedback_recording_ids($userid));
+
+        $kept = [];
+        foreach ($recordings as $rec) {
+            $ref = (string) $rec['bbbrecordingid'];
+            if (
+                isset($attendedrefs[$ref])
+                || isset($feedbackrefs[$ref])
+                // Guard 1 — no roster for this recording, so absence is unknowable.
+                || !isset($rostered[$ref])
+            ) {
+                $kept[] = $rec;
+            }
+        }
+
+        // Guard 3 — the student demonstrably attended something, yet not one of
+        // their sessions matched a recording. That is a contradiction, not an
+        // absence: the two identifiers have failed to reconcile, and the honest
+        // response is to show the sessions rather than report a student who was
+        // there as having missed everything. Without this, a site whose session
+        // ids do not line up with its recording ids loses every pill the moment
+        // its recordings acquire rosters.
+        if (empty($kept) && !empty($attendedrefs)) {
+            return [
+                'recordings' => $recordings,
+                'reason' => 'unreconciled',
+                'sessionref' => (string) array_key_first($attendedrefs),
+                'recordingref' => (string) ($recordings[0]['bbbrecordingid'] ?? ''),
+            ];
+        }
+
+        // Nothing was hidden, and only because no recording had a roster to
+        // judge against — worth saying so, since it looks identical on screen to
+        // a filter that simply did not run.
+        $reason = '';
+        if (count($kept) === count($recordings) && empty($rostered)) {
+            $reason = 'norosters';
+        }
+
+        return [
+            'recordings' => $kept,
+            'reason' => $reason,
+            'sessionref' => (string) (array_key_first($attendedrefs) ?? ''),
+            'recordingref' => (string) ($recordings[0]['bbbrecordingid'] ?? ''),
+        ];
+    }
+
+    /**
+     * BBB recording ids this user attended, from every source that records one.
+     *
+     * Deliberately a union rather than the single source get_engagement_summary()
+     * settles on for the metrics tiles. That method prefers summary logs and only
+     * falls back to the cached rows, which is right for display — the callback
+     * payload is richer — but wrong for deciding attendance, because the two
+     * sources identify a session differently:
+     *
+     *  - Cached rows are stamped with the recording id by the refresh itself,
+     *    which walks the recordings one at a time. They cannot disagree.
+     *  - Summary logs carry whatever the BBB server put in the callback's
+     *    `recordid`. On sites where that does not correspond to the recording
+     *    ids, every session the student attended resolves to nothing.
+     *
+     * Reading only the preferred source meant that on a site holding both, the
+     * roster was built from the cached rows while the student's own sessions came
+     * from the logs — so the comparison was between two different id spaces and
+     * every recording looked attended by nobody.
+     *
+     * @param int $userid
+     * @param array $sessions Sessions already resolved for the metrics tiles.
+     * @return array<string, true> Set keyed by BBB recording id.
+     */
+    private function get_attended_recording_refs(int $userid, array $sessions): array {
+        global $DB;
+
+        $refs = [];
+        foreach ($sessions as $session) {
+            $ref = (string) ($session['recordingref'] ?? '');
+            if ($ref !== '') {
+                $refs[$ref] = true;
+            }
+        }
+
+        $cached = $DB->get_fieldset_select(
+            'local_unifiedgrader_bbbeng',
+            'DISTINCT recordingid',
+            'cmid = :cmid AND userid = :userid',
+            ['cmid' => (int) $this->cm->id, 'userid' => $userid],
+        );
+        foreach ($cached as $ref) {
+            if ((string) $ref !== '') {
+                $refs[(string) $ref] = true;
+            }
+        }
+
+        return $refs;
+    }
+
+    /**
+     * The recording this user was present longest for, or '' when unknown.
+     *
+     * Read from the same two sources as get_attended_recording_refs(), for the
+     * same reason: whichever one carries a usable recording id should decide,
+     * rather than only the one the metrics tiles happen to prefer. Where both
+     * describe the same session the longer figure wins, so a partial record
+     * never displaces a complete one.
+     *
+     * @param int $userid
+     * @param array $sessions Sessions already resolved for the metrics tiles.
+     * @return string BBB recording id, or '' when no attendance carries one.
+     */
+    private function get_longest_attended_ref(int $userid, array $sessions): string {
+        global $DB;
+
+        $durations = [];
+        foreach ($sessions as $session) {
+            $ref = (string) ($session['recordingref'] ?? '');
+            if ($ref === '') {
+                continue;
+            }
+            $durations[$ref] = max($durations[$ref] ?? 0, (int) ($session['duration'] ?? 0));
+        }
+
+        $cached = $DB->get_records_sql(
+            "SELECT recordingid, MAX(duration) AS duration
+               FROM {local_unifiedgrader_bbbeng}
+              WHERE cmid = :cmid AND userid = :userid
+           GROUP BY recordingid",
+            ['cmid' => (int) $this->cm->id, 'userid' => $userid],
+        );
+        foreach ($cached as $row) {
+            $ref = (string) $row->recordingid;
+            if ($ref !== '') {
+                $durations[$ref] = max($durations[$ref] ?? 0, (int) $row->duration);
+            }
+        }
+
+        if (empty($durations)) {
+            return '';
+        }
+        arsort($durations);
+
+        return (string) array_key_first($durations);
+    }
+
+    /**
+     * BBB recording ids that anyone has attendance data against, for this activity.
+     *
+     * Answers "did we ever learn who attended this session?", which is what
+     * separates a genuine absence from a session we never had a roster for.
+     * Deliberately not scoped to a user.
+     *
+     * Protected so tests can declare which recordings have rosters without
+     * seeding attendee logs for every participant.
+     *
+     * @return array<string, true> Set keyed by BBB recording id.
+     */
+    protected function get_recordings_with_attendance_data(): array {
+        global $DB;
+
+        $rostered = [];
+
+        // The recording id sits inside the JSON meta of each summary log, so
+        // this cannot be a GROUP BY — decode and collect. One row per attendee
+        // per meeting keeps the set small enough to walk.
+        $metas = $DB->get_fieldset_select(
+            'bigbluebuttonbn_logs',
+            'meta',
+            'bigbluebuttonbnid = :bbbid AND log = :logtype',
+            [
+                'bbbid' => (int) $this->bbb->id,
+                'logtype' => \mod_bigbluebuttonbn\logger::EVENT_SUMMARY,
+            ],
+        );
+        foreach ($metas as $meta) {
+            if (empty($meta)) {
+                continue;
+            }
+            $decoded = json_decode($meta);
+            $ref = (string) ($decoded->recordid ?? '');
+            if ($ref !== '') {
+                $rostered[$ref] = true;
+            }
+        }
+
+        // Scraped rows carry the recording id in a column of its own.
+        $scraped = $DB->get_fieldset_select(
+            'local_unifiedgrader_bbbeng',
+            'DISTINCT recordingid',
+            'cmid = :cmid',
+            ['cmid' => (int) $this->cm->id],
+        );
+        foreach ($scraped as $ref) {
+            if ((string) $ref !== '') {
+                $rostered[(string) $ref] = true;
+            }
+        }
+
+        return $rostered;
+    }
+
+    /**
      * Build a switcher/preview entry from a recording entity, or null when the
      * recording has no usable playback URL.
      *
@@ -1081,6 +1525,9 @@ class bbb_adapter extends base_adapter {
         if (empty($playbackurl)) {
             return null;
         }
+
+        $groupid = (int) ($rec->get('groupid') ?? 0);
+        $playbackurl = $this->pin_group_param($playbackurl, $groupid);
 
         $starttime = (int) ($rec->get('starttime') ?? 0);
         // BBB stores starttime in milliseconds; normalise to seconds.
@@ -1113,7 +1560,7 @@ class bbb_adapter extends base_adapter {
             'hasstatisticsurl' => !empty($statisticsurl),
             'starttime' => $starttime,
             'endtime' => $endtime,
-            'groupid' => (int) ($rec->get('groupid') ?? 0),
+            'groupid' => $groupid,
             'sessionlabel' => $starttime > 0 ? userdate($starttime) : $name,
         ];
     }
@@ -1180,6 +1627,33 @@ class bbb_adapter extends base_adapter {
         }
 
         return $bytype['presentation'] ?? $bytype['video'] ?? reset($bytype);
+    }
+
+    /**
+     * Pin a playback URL to the recording's own group.
+     *
+     * BBB builds playback URLs as bbb_view.php?action=play&bn=…&rid=… with no group.
+     * bbb_view.php then resolves the group with groups_get_activity_group($cm, true),
+     * which — absent a `group` param — falls back to the viewer's *sticky* active
+     * group in $SESSION. When that sticky group differs from the recording's group,
+     * instance::get_recordings() filters the recording out and bbb_view.php answers
+     * "The recording was not found." and bounces to the activity page — inside our
+     * preview iframe, which is all the teacher sees. Teachers pick up a sticky group
+     * simply by using a group selector anywhere in the course, so the grader must say
+     * explicitly which group it means.
+     *
+     * group=0 ("All participants") is only honoured for viewers with accessallgroups
+     * or in visible-groups mode, and is ignored otherwise — harmless either way.
+     *
+     * @param string $url The bbb_view.php playback URL.
+     * @param int $groupid The recording's group (0 = no group / all participants).
+     * @return string
+     */
+    private function pin_group_param(string $url, int $groupid): string {
+        $moodleurl = new \moodle_url($url);
+        $moodleurl->param('group', $groupid);
+        // Unescaped: the caller hands this to Mustache/html_writer, which escapes it there.
+        return $moodleurl->out(false);
     }
 
     /**

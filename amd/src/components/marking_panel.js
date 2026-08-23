@@ -912,15 +912,15 @@ export default class extends BaseComponent {
         // total and the override indicator below — otherwise both are derived
         // from the previous student's grade, producing the spurious "Overridden"
         // badge and stale "Rubric total" teachers reported on quizzes.
+        //
+        // The quiz adapter reports the engine's own total, which is already the
+        // un-penalised figure — the deduction is applied on the way to the
+        // gradebook, not to this value. Adding it back here inflated the base by
+        // the penalty and, with it, every guide total derived from it.
         if (state.activity?.type === 'quiz' && state.grade) {
-            if (state.grade.grade === null) {
-                this._quizBaseGrade = 0;
-            } else {
-                const deduction = this._getTotalPenaltyDeduction(state);
-                this._quizBaseGrade = deduction > 0
-                    ? Math.round((parseFloat(state.grade.grade) + deduction) * 100) / 100
-                    : parseFloat(state.grade.grade);
-            }
+            this._quizBaseGrade = state.grade.grade === null
+                ? 0
+                : parseFloat(state.grade.grade);
         }
         this._renderAdvancedGrading(state, isFreshRender);
 
@@ -965,9 +965,9 @@ export default class extends BaseComponent {
             }
         } else {
             // Points: set the numeric input value on a fresh render only.
-            // Forums and assignments store the raw (teacher-given) grade — show it
-            // as-is. Other activities store the post-penalty grade, so the typed
-            // mark is reconstructed by adding the deduction back.
+            // Activities that store the raw (teacher-given) grade show it as-is.
+            // Other activities store the post-penalty grade, so the typed mark is
+            // reconstructed by adding the deduction back.
             //
             // That reconstruction is only sound while the stored grade was saved
             // under the SAME penalties it is being un-deducted against. Assignments
@@ -975,11 +975,18 @@ export default class extends BaseComponent {
             // penalty applied after grading inflated the field (6 became 18 under a
             // 100% penalty), and a penalty big enough to clamp the stored grade to
             // zero destroyed the mark outright.
+            //
+            // Quizzes and BigBlueButton belong on this list for the same reason:
+            // both adapters return the un-penalised mark (the engine total and
+            // grade_grades.rawgrade respectively) and apply the deduction only on
+            // the way to the gradebook. Adding it back here showed a quiz marked
+            // 80 with a 15-point penalty as 95 — the gradebook was right, the
+            // number under the teacher's cursor was not.
             const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
             if (gradeInput && state.grade) {
                 let displayGrade = state.grade.grade;
-                const storesRawGrade = state.activity?.type === 'forum'
-                    || state.activity?.type === 'assign';
+                const storesRawGrade = ['forum', 'assign', 'quiz', 'bigbluebuttonbn']
+                    .includes(state.activity?.type);
                 if (displayGrade !== null && !storesRawGrade) {
                     const totalDeduction = this._getTotalPenaltyDeduction(state);
                     if (totalDeduction > 0) {
@@ -1470,8 +1477,9 @@ export default class extends BaseComponent {
         }
         // Neither is there anything to validate on a quiz. The box is a
         // read-only readout of a total this panel computes itself
-        // (_computeRubricGrade's quizmanual branch returns the quiz grade plus
-        // the manual-mark delta, with no upper clamp), so refusing the save
+        // (_computeRubricGrade's quizmanual branch scales the whole-quiz marks
+        // onto the quiz maximum, and falls back to an unclamped manual-mark
+        // delta on a scale-graded quiz), so refusing the save
         // when it exceeds the activity max would block a legitimate
         // per-question save over a number the teacher cannot even edit. The
         // server takes the same position — save_grade skips the max check for
@@ -2844,12 +2852,35 @@ export default class extends BaseComponent {
      * @return {number} The rubric-implied grade on the activity's scale.
      */
     _computeRubricGrade(total, maxTotal, gradeInput) {
-        if (this._gradingDefinition?.method === 'quizmanual' && this._quizBaseGrade !== undefined) {
-            // For quiz manual grading, the guide only shows manually-graded
-            // questions. The displayed grade is the full quiz grade adjusted
-            // by the delta between current manual scores and the initial manual total.
-            const delta = total - (this._guideBaseTotal ?? 0);
-            return Math.max(0, this._roundToGradePrecision(this._quizBaseGrade + delta));
+        if (this._gradingDefinition?.method === 'quizmanual') {
+            // For quiz manual grading the guide only shows the manually-graded
+            // questions, so the whole-quiz grade is (marks already earned on the
+            // other questions + the manual marks entered here), scaled from raw
+            // marks onto the quiz's maximum grade.
+            //
+            // This cannot be a delta on the stored quiz grade: an attempt with
+            // any question still awaiting marking has no stored grade at all
+            // (sumgrades is NULL until every question is graded), so the base was
+            // 0 for exactly the students being marked and the pane showed the
+            // manual marks alone until the teacher navigated away and back. The
+            // delta was also unscaled, so on a quiz whose raw total differs from
+            // its maximum grade each edit moved the grade by the wrong amount.
+            const auto = parseFloat(this._gradingDefinition.quizautomarks);
+            const sumMax = parseFloat(this._gradingDefinition.quizsummax);
+            const maxGrade = parseFloat(this._gradingDefinition.quizmaxgrade);
+            if (isFinite(auto) && sumMax > 0 && maxGrade > 0) {
+                const scaled = ((auto + total) / sumMax) * maxGrade;
+                return Math.min(
+                    maxGrade,
+                    Math.max(0, this._roundToGradePrecision(scaled)),
+                );
+            }
+            // Scale-graded quiz (or missing scaling data): fall back to adjusting
+            // the stored grade by the change in manual marks.
+            if (this._quizBaseGrade !== undefined) {
+                const delta = total - (this._guideBaseTotal ?? 0);
+                return Math.max(0, this._roundToGradePrecision(this._quizBaseGrade + delta));
+            }
         }
         // Normalize the guide total to the assignment's grade scale.
         // A marking guide may have a different max total than the activity
