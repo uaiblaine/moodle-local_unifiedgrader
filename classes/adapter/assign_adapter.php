@@ -698,8 +698,12 @@ class assign_adapter extends base_adapter {
              * "--" deliberate reset is the path that does lift it, on purpose,
              * via reset_grade_and_submission().
              */
+            // The two blocks need different advice: "--" lifts an override, so
+            // it is offered for one, but nothing here can lift a lock.
             throw new \moodle_exception(
-                'error_grade_clear_blocked_by_gradebook',
+                $this->is_gradebook_grade_locked($userid)
+                    ? 'error_grade_clear_blocked_by_lock'
+                    : 'error_grade_clear_blocked_by_gradebook',
                 'local_unifiedgrader',
             );
         }

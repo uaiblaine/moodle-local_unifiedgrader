@@ -432,6 +432,45 @@ abstract class base_adapter {
     }
 
     /**
+     * Whether a gradebook lock holds a mark for this user that a clear cannot remove.
+     *
+     * A lock is the one gradebook block the grader must not try to work around:
+     * clear_recoverable_gradebook_block() lifts an override but leaves a lock
+     * alone, and the gradebook then refuses every update to the cell. Clearing
+     * the activity's own grade under one leaves the gradebook keeping the mark.
+     *
+     * Only a lock over an actual mark counts. When the column is locked but this
+     * student has no gradebook grade, there is nothing for a clear to leave
+     * behind, and refusing would block the cleanup "--" exists for: an orphan
+     * submission row left by an accidental click on a student who never submitted.
+     *
+     * @param int $userid
+     * @return bool True when the grade is locked and the gradebook holds a grade for it.
+     */
+    public function is_gradebook_grade_locked(int $userid): bool {
+        $gradeitem = $this->fetch_grade_item();
+        if ($gradeitem === null || !$gradeitem->is_locked($userid)) {
+            return false;
+        }
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
+        return $gradegrade && $gradegrade->finalgrade !== null;
+    }
+
+    /**
+     * Whether the deliberate "--" reset must be refused for this user.
+     *
+     * By default, whenever a gradebook lock holds a mark: the reset clears the
+     * activity's own grade and the gradebook refuses to follow. An adapter whose
+     * reset cannot make the two disagree overrides this.
+     *
+     * @param int $userid
+     * @return bool
+     */
+    public function reset_blocked_by_lock(int $userid): bool {
+        return $this->is_gradebook_grade_locked($userid);
+    }
+
+    /**
      * Perform a submission management action.
      *
      * Override in concrete adapters that support submission actions.

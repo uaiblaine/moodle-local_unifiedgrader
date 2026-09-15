@@ -409,6 +409,63 @@ final class forum_rating_helper_test extends \advanced_testcase {
     }
 
     /**
+     * "--" on a rating forum still withdraws the marker's ratings under a gradebook lock.
+     *
+     * The web service refuses "--" while a locked gradebook grade holds a mark,
+     * because most resets would then clear the activity's grade while the gradebook
+     * kept it. A rating forum shows the gradebook's own grade, so its reset cannot
+     * diverge that way, and forum_adapter::reset_blocked_by_lock() lets it through.
+     * The preconditions matter: the cell is locked and holds a mark, which is
+     * exactly what the default guard refuses.
+     */
+    public function test_reset_withdraws_ratings_under_a_gradebook_lock(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $s = $this->rating_scenario();
+        $student = $s->students[0];
+        $postid = $this->post($s, $student, 'Locked');
+        $s->adapter->save_post_rating($postid, 4);
+        $this->assertEquals(1, $DB->count_records('rating', ['itemid' => $postid, 'userid' => $s->teacher->id]));
+
+        $item = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'forum',
+            'iteminstance' => $s->activity->id,
+            'itemnumber' => 0,
+        ]);
+        $gradegrade = \grade_grade::fetch(['itemid' => $item->id, 'userid' => $student->id]);
+        $this->assertNotEmpty($gradegrade, 'Precondition: the rating reached the gradebook.');
+        $gradegrade->locked = time();
+        $gradegrade->update();
+        $this->assertTrue($item->is_locked($student->id), 'Precondition: the gradebook grade is locked.');
+        $this->assertNotNull(
+            \grade_grade::fetch(['itemid' => $item->id, 'userid' => $student->id])->finalgrade,
+            'Precondition: the locked grade holds a mark.'
+        );
+
+        $result = \local_unifiedgrader\external\save_grade::execute(
+            (int) $s->cm->id,
+            (int) $student->id,
+            -1,
+            '',
+            FORMAT_HTML,
+            '',
+            0,
+            0,
+            -1,
+            true,
+        );
+
+        $this->assertTrue($result['success']);
+        $this->assertEquals(
+            0,
+            $DB->count_records('rating', ['itemid' => $postid, 'userid' => $s->teacher->id]),
+            'The marker\'s own rating must be withdrawn.'
+        );
+    }
+
+    /**
      * Advanced grading is a whole-forum feature; ratings must not offer it.
      */
     public function test_no_advanced_grading_in_rating_mode(): void {

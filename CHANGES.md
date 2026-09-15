@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.11.1+uai.2 (2026091501)
+
+Three fixes found while reviewing the upstream v2.11.1 merge. Two correct this fork's own earlier fixes;
+the third was there for plain rubrics and reaches upstream's ranged rubric too.
+
+- **A save the server refused was shown as saved.** When the server refused a save (feedback typed on
+  a page opened before Feedback comments was turned off, or a grade cleared while the gradebook blocks
+  it), the panel still marked the grade and feedback as saved, deleted their offline copy, and re-sent
+  any save held behind the refused one, which was refused again. The leave-page warning then stayed
+  silent, so typed feedback could be lost on reload. A refused save now leaves both unsaved and keeps
+  the offline copy, drops the held save, and leaves the feedback editor open. A refused clear (`-` or
+  `--`) puts the stored grade back in the grade box instead of leaving it blank, which read as an
+  ungraded student, or on the scale menu for a scale-graded assignment. A grade typed or a level picked
+  while the refused save was in flight is a new edit, so it is kept, still unsaved, and a save held for
+  it runs. The panel also no longer marks the form saved on interface changes that are not the end of a
+  grade save, such as posting or hiding grades or a post rating finishing first, and an error from one
+  of the refresh calls after a stored save is no longer mistaken for a refusal.
+- **`--` reported success on a locked gradebook grade.** The v2.8.8 message for a refused clear
+  suggested typing `--`. On a locked grade, `--` cleared the activity's grade while the gradebook kept
+  the mark, and reported success. `--` is now refused while a locked gradebook grade holds a mark, for
+  every activity type except a rating forum, whose `--` withdraws only the marker's own ratings and
+  whose displayed grade is the gradebook's own. A locked column with no mark for the student does not
+  block `--`, since there is nothing to keep and cleaning up an accidental submission row is what `--`
+  is for. The `-` refusal says which block it met: a lock, which only the gradebook can lift, or an
+  override, which `--` lifts.
+- **Typing in the grade box on a rubric page reset the rubric total to 0.** The grade box and "Reset to
+  rubric total" recomputed the marking-guide total whatever the grading method, and on a rubric or
+  ranged rubric page that total is always 0: the rubric badge read "0 / 0", and Reset wrote 0 into the
+  grade box and saved it. Both now recompute the total for the method in use.
+
+Coverage: PHPUnit for the locked `--` refusal (both stores left unchanged), the lock message for `-`, a
+locked column with no mark for the student, and a rating forum's `--` under a lock. Behat for a refused
+clear (overridden and locked, each with its message), a grade typed while a refused clear is in flight,
+refused feedback on a stale page, hiding grades with unsaved feedback, and resetting an overridden rubric
+grade. Mutation-checked: removing the `--` lock refusal, the rating-forum exemption, the no-mark condition,
+the choice between the two `-` messages, the refused-save handling, the grade restore, the lock code in
+the restore list, the unchanged-form check, the end-of-save check, and the rubric total dispatch in the
+grade box and in Reset each turns its test red.
+
+Still open: on a forum graded as a whole, clearing the grade with `-`, or changing it, under a locked
+gradebook grade still changes the forum's own grade while the gradebook keeps the mark, with no error.
+
 ## v2.11.1+uai.1 (2026091500)
 
 Merge of the upstream v2.9.5, v2.10.0, v2.11.0 and v2.11.1 releases into this fork. Upstream brings

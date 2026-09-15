@@ -159,6 +159,9 @@ export default class extends BaseComponent {
         // What the last dispatched save sent (see _formSnapshot), so a held
         // autosave can tell a real change from a post-save re-render.
         this._dispatchedForm = null;
+        // Set when _updateUI sees a grade save start (ui.gradesaving), cleared
+        // when it handles that save's end. Only that end may mark the form clean.
+        this._saveCycleOpen = false;
         this._reportButtonLabel = 'Report academic impropriety';
         // Default label for the standalone grade-pane referral button; captured
         // from the rendered span on init, with this English fallback for safety.
@@ -240,11 +243,11 @@ export default class extends BaseComponent {
                 this._validateGrade();
                 this._updatePercentage();
                 this._updateFinalGradeDisplay();
-                // Refresh the override badge on every keystroke. _updateGuideTotal
-                // is the simplest way to do this: it recomputes the rubric grade
-                // and drives the indicator. The gradeInput write inside is a
-                // no-op while the override flag is set.
-                this._updateGuideTotal();
+                // Refresh the override badge on every keystroke: the total
+                // recomputes the rubric or guide grade and drives the
+                // indicator. Its gradeInput write is a no-op while the
+                // override flag is set.
+                this._updateGradingTotal();
                 if (DirtyTracker.hasChanged('grade', gradeInput.value)) {
                     DirtyTracker.markDirty('grade');
                     this._cacheGradeValue();
@@ -273,8 +276,8 @@ export default class extends BaseComponent {
         if (resetBtn) {
             resetBtn.addEventListener('click', () => {
                 this._gradeManuallyOverridden = false;
-                this._updateGuideTotal();
-                // _updateGuideTotal wrote the rubric value back into the
+                this._updateGradingTotal();
+                // The total wrote the rubric or guide value back into the
                 // grade input; mark dirty so the autosave persists the
                 // reset, then trigger validation + autosave.
                 if (gradeInput) {
@@ -1331,47 +1334,139 @@ export default class extends BaseComponent {
      * @param {object} args.state Current state.
      */
     async _updateUI({state}) {
+        // The end of a grade save is detected on ui.gradesaving, which only
+        // saveGrade writes. ui.saving is shared with saves that store nothing of
+        // this form (a post rating, feedback files), and an overlapping one could
+        // otherwise end the cycle early. Handled before the awaits below, because
+        // the event that ends a save can arrive while an earlier call is still
+        // loading a string.
+        if (state.ui.gradesaving) {
+            this._saveCycleOpen = true;
+        } else if (this._saveCycleOpen) {
+            this._saveCycleOpen = false;
+            this._endGradeSave(state);
+        }
+
         const saveBtn = this.getElement(this.selectors.SAVE_GRADE_BTN);
-        if (saveBtn) {
-            if (state.ui.saving) {
-                saveBtn.disabled = true;
-                saveBtn.textContent = await getString('saving', 'local_unifiedgrader');
-            } else {
-                saveBtn.disabled = false;
-                saveBtn.textContent = await getString('savefeedback', 'local_unifiedgrader');
+        if (!saveBtn) {
+            return;
+        }
+        if (state.ui.saving) {
+            saveBtn.disabled = true;
+            saveBtn.textContent = await getString('saving', 'local_unifiedgrader');
+        } else {
+            saveBtn.disabled = false;
+            saveBtn.textContent = await getString('savefeedback', 'local_unifiedgrader');
+        }
+    }
 
-                // Save cycle complete — allow future saves.
-                this._saveInFlight = false;
+    /**
+     * Settle the form at the end of a grade save, or handle its refusal.
+     *
+     * Runs once per save. Interface changes that are not the end of one (posting
+     * or hiding grades, loading a student, a post rating) used to mark the form
+     * clean as well.
+     *
+     * @param {object} state Current state.
+     */
+    _endGradeSave(state) {
+        // Save cycle complete — allow future saves.
+        this._saveInFlight = false;
 
-                // When saving transitions to false, the save completed — mark clean.
-                const gradeInputEl = this.getElement(this.selectors.GRADE_INPUT);
-                const scaleInputEl = this.getElement(this.selectors.SCALE_INPUT);
-                const currentGradeValue = gradeInputEl ? gradeInputEl.value
-                    : (scaleInputEl ? scaleInputEl.value : '');
-                DirtyTracker.setSnapshot('grade', currentGradeValue);
-                DirtyTracker.setSnapshot('feedback', this._getEditorContent());
-                DirtyTracker.markClean('grade');
-                DirtyTracker.markClean('feedback');
+        if (state.ui.lastsavefailed) {
+            this._afterRefusedSave(state);
+            return;
+        }
 
-                // Clear the IndexedDB cache after successful server save.
-                const cmid = state.activity?.cmid;
-                const userid = state.currentUser?.id;
-                if (cmid && userid) {
-                    OfflineCache.remove(cmid, userid, 'grade');
-                    OfflineCache.remove(cmid, userid, 'feedback');
-                }
+        // The save completed — mark clean.
+        const gradeInputEl = this.getElement(this.selectors.GRADE_INPUT);
+        const scaleInputEl = this.getElement(this.selectors.SCALE_INPUT);
+        const currentGradeValue = gradeInputEl ? gradeInputEl.value
+            : (scaleInputEl ? scaleInputEl.value : '');
+        DirtyTracker.setSnapshot('grade', currentGradeValue);
+        DirtyTracker.setSnapshot('feedback', this._getEditorContent());
+        DirtyTracker.markClean('grade');
+        DirtyTracker.markClean('feedback');
 
-                // Run a save that arrived while this one was in flight. It reads
-                // the live form now, so it carries whatever the teacher changed
-                // during the round trip. Cleared before dispatching, so the
-                // re-run can queue a request of its own without looping.
-                const pending = this._pendingSaveRequest;
-                this._pendingSaveRequest = null;
-                const changed = !pending?.auto || this._formSnapshot() !== this._dispatchedForm;
-                if (pending && pending.userid === state.currentUser?.id && changed) {
-                    this._handleSaveGrade(pending.explicit);
-                }
+        // Clear the IndexedDB cache after successful server save.
+        const cmid = state.activity?.cmid;
+        const userid = state.currentUser?.id;
+        if (cmid && userid) {
+            OfflineCache.remove(cmid, userid, 'grade');
+            OfflineCache.remove(cmid, userid, 'feedback');
+        }
+
+        // Run a save that arrived while this one was in flight. It reads
+        // the live form now, so it carries whatever the teacher changed
+        // during the round trip. Cleared before dispatching, so the
+        // re-run can queue a request of its own without looping.
+        const pending = this._pendingSaveRequest;
+        this._pendingSaveRequest = null;
+        const changed = !pending?.auto || this._formSnapshot() !== this._dispatchedForm;
+        if (pending && pending.userid === state.currentUser?.id && changed) {
+            this._handleSaveGrade(pending.explicit);
+        }
+    }
+
+    /**
+     * End a save the server refused.
+     *
+     * Nothing was stored, so nothing is clean: the dirty flags stay set, which
+     * keeps the leave-page warning, and so does the offline copy. An armed
+     * feedback collapse is disarmed, because no save landed for it to confirm.
+     *
+     * The rest depends on whether the form still holds exactly what the refused
+     * save sent. If it does, a held request would send the same refused payload
+     * and raise the same dialogue again, so it is dropped; and a refused clear
+     * ("-" or "--"), which blanked the grade box before sending, has the box put
+     * back to the grade this panel last loaded, which the refusal leaves stored.
+     * A grade typed or a level picked during the round trip is a new edit: it is
+     * neither overwritten nor dropped, and a request held for it runs.
+     *
+     * The stored grade is read from state rather than fetched again: refreshing
+     * state.grade re-renders the panel, and that render marks unsaved feedback clean.
+     *
+     * @param {object} state Current state.
+     */
+    _afterRefusedSave(state) {
+        this._collapseFeedbackAfterSave = false;
+
+        const untouched = this._formSnapshot() === this._dispatchedForm;
+        const pending = this._pendingSaveRequest;
+        this._pendingSaveRequest = null;
+        if (!untouched) {
+            if (pending && pending.userid === state.currentUser?.id) {
+                this._handleSaveGrade(pending.explicit);
             }
+            return;
+        }
+
+        const refusedClearCodes = ['error_grade_clear_blocked_by_gradebook', 'error_grade_clear_blocked_by_lock'];
+        if (!state.grade || !refusedClearCodes.includes(state.ui.lastsaveerror)) {
+            return;
+        }
+        // A scale grade goes back on its select, rounded as _renderGrade does; points on the number box.
+        const usescale = !!state.activity?.usescale;
+        const input = this.getElement(usescale ? this.selectors.SCALE_INPUT : this.selectors.GRADE_INPUT);
+        if (!input) {
+            return;
+        }
+        const stored = state.grade.grade;
+        if (stored === null || stored === undefined) {
+            input.value = '';
+        } else {
+            input.value = usescale ? String(Math.round(stored)) : String(stored);
+        }
+        if (!usescale) {
+            this._updatePercentage();
+            this._updateFinalGradeDisplay();
+        }
+        DirtyTracker.setSnapshot('grade', input.value);
+        DirtyTracker.markClean('grade');
+        const cmid = state.activity?.cmid;
+        const userid = state.currentUser?.id;
+        if (cmid && userid) {
+            OfflineCache.remove(cmid, userid, 'grade');
         }
     }
 
@@ -2676,6 +2771,24 @@ export default class extends BaseComponent {
             });
         });
         this._updateRubricTotal();
+    }
+
+    /**
+     * Recompute the advanced-grading total with the method this page uses.
+     *
+     * A rubric, ranged or not, keeps its marks in _rubricSelections; a marking
+     * guide, and a quiz's manual questions, keep theirs in _guideScores. Each total
+     * reads only its own. Running the guide total on a rubric page summed nothing,
+     * so typing in the grade box set the rubric badge to "0 / 0", and "Reset to
+     * rubric" wrote 0 into the box and saved it.
+     */
+    _updateGradingTotal() {
+        const method = this._gradingDefinition?.method;
+        if (method === 'rubric' || method === 'rubric_ranges') {
+            this._updateRubricTotal();
+        } else {
+            this._updateGuideTotal();
+        }
     }
 
     /**

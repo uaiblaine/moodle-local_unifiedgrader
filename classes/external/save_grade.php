@@ -133,6 +133,15 @@ class save_grade extends external_api {
         // grade, remove any orphan submission row that was never genuinely
         // submitted by the student. Leaves real submissions untouched.
         if (!empty($params['reset'])) {
+            // A locked gradebook grade cannot be reset from here. The reset would
+            // clear the activity's own grade (a whole-forum grade is deleted
+            // outright), the gradebook would refuse to follow, and the call would
+            // still report success: the grader shows the student ungraded while
+            // the gradebook, and the student, keep the mark. Each adapter decides
+            // whether its reset can diverge that way; a rating forum's cannot.
+            if ($adapter->reset_blocked_by_lock($params['userid'])) {
+                throw new \moodle_exception('error_grade_clear_blocked_by_lock', 'local_unifiedgrader');
+            }
             $success = $adapter->reset_grade_and_submission($params['userid']);
             return ['success' => $success];
         }

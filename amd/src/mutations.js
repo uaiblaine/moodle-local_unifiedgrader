@@ -297,9 +297,14 @@ export default class {
         // before the save completes, we must skip the post-save state refresh
         // to avoid overwriting the newly loaded student's data.
         const savedForUser = userid;
+        // Whether save_grade itself returned, as opposed to a refresh call after it.
+        let stored = false;
 
         stateManager.setReadOnly(false);
         stateManager.state.ui.saving = true;
+        stateManager.state.ui.gradesaving = true;
+        stateManager.state.ui.lastsavefailed = false;
+        stateManager.state.ui.lastsaveerror = '';
         stateManager.setReadOnly(true);
 
         try {
@@ -328,6 +333,7 @@ export default class {
                     reset: !!reset,
                 },
             }])[0];
+            stored = true;
 
             // If the teacher has already navigated to a different student,
             // skip the refresh — loadStudent will have already loaded the
@@ -335,6 +341,7 @@ export default class {
             if (stateManager.state.currentUser?.id !== savedForUser) {
                 stateManager.setReadOnly(false);
                 stateManager.state.ui.saving = false;
+                stateManager.state.ui.gradesaving = false;
                 stateManager.setReadOnly(true);
                 return;
             }
@@ -387,6 +394,7 @@ export default class {
             if (stateManager.state.currentUser?.id !== savedForUser) {
                 stateManager.setReadOnly(false);
                 stateManager.state.ui.saving = false;
+                stateManager.state.ui.gradesaving = false;
                 stateManager.setReadOnly(true);
                 return;
             }
@@ -411,6 +419,7 @@ export default class {
             }
 
             stateManager.state.ui.saving = false;
+            stateManager.state.ui.gradesaving = false;
             stateManager.setReadOnly(true);
 
             // Refresh the filemanager widget after draft area has been re-prepared.
@@ -452,7 +461,16 @@ export default class {
                 _handleError(error);
             }
             stateManager.setReadOnly(false);
+            // A server refusal stored nothing; say so, or the panel treats the end
+            // of this save as a completed one. Not flagged: a network failure, whose
+            // payload is queued above and retried, and an error from a refresh call,
+            // which runs only after save_grade has stored the grade.
+            if (error?.errorcode && !stored) {
+                stateManager.state.ui.lastsavefailed = true;
+                stateManager.state.ui.lastsaveerror = error.errorcode;
+            }
             stateManager.state.ui.saving = false;
+            stateManager.state.ui.gradesaving = false;
             stateManager.setReadOnly(true);
         }
     }

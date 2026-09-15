@@ -499,6 +499,56 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * A clear refused because the gradebook grade is LOCKED says so.
+     *
+     * The overridden case above suggests "--", which lifts an override. Nothing in
+     * the grader can lift a lock, and "--" is refused for one too, so offering it
+     * here sent teachers round in a circle. The test above pins the override
+     * message; this one pins the lock message, so a refusal that always picked one
+     * of the two fails one of them.
+     */
+    public function test_clearing_a_grade_is_refused_with_the_lock_message_when_the_grade_is_locked(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/gradelib.php');
+        $this->resetAfterTest();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+
+        $this->setUser($student);
+        $plugingen->create_assign_submission($s->scenario->activity, $student->id);
+        $this->setUser($s->scenario->teacher);
+        $s->adapter->save_grade($student->id, 50.0, '<p>First pass.</p>');
+
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $s->scenario->activity->id,
+            'itemnumber' => 0,
+            'courseid' => $s->scenario->course->id,
+        ]);
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id]);
+        $gradegrade->locked = time();
+        $gradegrade->update();
+        $this->assertTrue($gradeitem->is_locked($student->id), 'Precondition: the gradebook grade must be locked.');
+
+        $adapter = adapter_factory::create($s->scenario->cm->id);
+        try {
+            $adapter->save_grade($student->id, null, '<p>First pass.</p>');
+            $this->fail('Clearing the grade should have been refused while the gradebook grade is locked.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('error_grade_clear_blocked_by_lock', $e->errorcode);
+        }
+
+        $this->assertEquals(
+            50.0,
+            $adapter->get_grade_data($student->id)['grade'],
+            'The refusal must reflect reality - the grade was not cleared.'
+        );
+    }
+
+    /**
      * The "--" deliberate reset clears the grade, but only strips the orphan
      * submission when the grader may edit other people's submissions.
      *
