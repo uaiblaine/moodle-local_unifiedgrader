@@ -1754,6 +1754,23 @@ SCRIPT;
     }
 
     /**
+     * A rating forum's "--" is allowed under a gradebook lock.
+     *
+     * It withdraws only this marker's ratings, and a rating forum shows the grade
+     * the gradebook holds (get_grade_data reads it from there), so a locked cell
+     * keeps the display and the gradebook in step, and unlocking recomputes from
+     * the ratings left. Core's own rating interface ignores the lock the same way,
+     * and single ratings can still be changed here. A whole-forum grade lives in
+     * forum_grades and can diverge like any other, so it keeps the default.
+     *
+     * @param int $userid
+     * @return bool
+     */
+    public function reset_blocked_by_lock(int $userid): bool {
+        return !$this->is_rating_mode() && parent::reset_blocked_by_lock($userid);
+    }
+
+    /**
      * Deliberate reset for forums.
      *
      * Forums don't have a separate "submission" object the way mod_assign does

@@ -49,6 +49,9 @@ use Behat\Mink\Exception\ExpectationException;
  * Unified Grader steps.
  */
 class behat_local_unifiedgrader extends behat_base {
+    /** @var string Message of the last save refusal a step closed. */
+    private string $lastrefusal = '';
+
     /**
      * Open the Unified Grader for the activity with the given name in the
      * current course. Resolves the cmid by name lookup so feature files
@@ -233,6 +236,349 @@ class behat_local_unifiedgrader extends behat_base {
             '',
             $definition,
         );
+    }
+
+    /**
+     * Attach a rubric to an assignment, with the given criteria and levels.
+     *
+     * Same approach as the marking guide step above, through core's PHPUnit
+     * generator gradingform_rubric_generator::create_instance(). Levels are
+     * "definition:score" pairs, comma separated.
+     *
+     * Example:
+     *   Given a rubric is attached to "Essay 1" with criteria:
+     *     | criterion | levels                         |
+     *     | Argument  | Weak:0, Sound:5, Compelling:10 |
+     *
+     * @Given /^a rubric is attached to "(?P<activity>[^"]+)" with criteria:$/
+     * @param string $activity Assignment name.
+     * @param TableNode $criteria Rows of criterion + levels.
+     */
+    public function a_rubric_is_attached_to(string $activity, TableNode $criteria): void {
+        $definition = [];
+        foreach ($criteria->getHash() as $row) {
+            $levels = [];
+            foreach (explode(',', $row['levels']) as $pair) {
+                [$name, $score] = array_map('trim', explode(':', $pair, 2));
+                $levels[$name] = (int) $score;
+            }
+            $definition[$row['criterion']] = $levels;
+        }
+
+        $generator = \testing_util::get_data_generator()->get_plugin_generator('gradingform_rubric');
+        $generator->create_instance(
+            \context_module::instance($this->assign_cmid($activity)),
+            'mod_assign',
+            'submissions',
+            $activity . ' rubric',
+            '',
+            $definition,
+        );
+    }
+
+    /**
+     * Assert the rubric or marking guide total badge shows the given text.
+     *
+     * Scoped to the badge on purpose: every rubric level button also prints its
+     * own score ("10 pts"), so a page-wide "I should see" would pass on a level.
+     *
+     * @Then /^the rubric total shows "(?P<expected>[^"]*)"$/
+     * @param string $expected Badge text.
+     */
+    public function the_rubric_total_shows(string $expected): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $actual = trim((string) $this->find('css', '[data-region="rubric-total"]')->getText());
+        if ($actual !== $expected) {
+            throw new ExpectationException(
+                "Expected the rubric total to show '{$expected}', found '{$actual}'",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Override or lock a student's gradebook grade for an assignment.
+     *
+     * @Given /^the gradebook grade for "(?P<student>[^"]+)" on "(?P<activity>[^"]+)" is (?P<block>overridden|locked)$/
+     * @param string $student Student username.
+     * @param string $activity Assignment name.
+     * @param string $block "overridden" or "locked".
+     */
+    public function the_gradebook_grade_is_blocked(string $student, string $activity, string $block): void {
+        global $CFG, $DB;
+        require_once($CFG->libdir . '/gradelib.php');
+
+        $cmid = $this->assign_cmid($activity);
+        $assignid = (int) $DB->get_field('course_modules', 'instance', ['id' => $cmid], MUST_EXIST);
+        $studentid = (int) $DB->get_field('user', 'id', ['username' => $student], MUST_EXIST);
+        $item = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $assignid,
+            'itemnumber' => 0,
+        ]);
+        $grade = $item ? \grade_grade::fetch(['itemid' => $item->id, 'userid' => $studentid]) : false;
+        if (!$grade) {
+            throw new Exception("'{$student}' has no gradebook grade on '{$activity}' to block");
+        }
+        if ($block === 'overridden') {
+            $grade->set_overridden(true, false);
+        } else {
+            $grade->locked = time();
+            $grade->update();
+        }
+    }
+
+    /**
+     * Turn an assignment's Feedback comments off, typically after the grader has
+     * loaded with them on, which is the stale page the server's refusal is for.
+     *
+     * @Given /^feedback comments are disabled on "(?P<activity>[^"]+)"$/
+     * @param string $activity Assignment name.
+     */
+    public function feedback_comments_are_disabled_on(string $activity): void {
+        global $DB;
+        $assignid = (int) $DB->get_field('course_modules', 'instance', ['id' => $this->assign_cmid($activity)], MUST_EXIST);
+        $DB->set_field('assign_plugin_config', 'value', '0', [
+            'assignment' => $assignid,
+            'plugin' => 'comments',
+            'subtype' => 'assignfeedback',
+            'name' => 'enabled',
+        ]);
+    }
+
+    /**
+     * Put text into the overall feedback editor the way typing would register it.
+     *
+     * Sets the TinyMCE content and dispatches the editor's input event, which is
+     * what the marking panel listens to before marking feedback unsaved. Repeated
+     * until the panel has registered the edit: its editor listener is attached on a
+     * timer after the editor exists, so a single attempt can land before anything
+     * listens, and the scenario would then fail on its precondition.
+     *
+     * @When /^I type "(?P<text>[^"]*)" as the overall feedback$/
+     * @param string $text Feedback text (wrapped in a paragraph).
+     */
+    public function i_type_as_the_overall_feedback(string $text): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $html = json_encode('<p>' . s($text) . '</p>');
+        $js = "(function(){"
+            . "var t=document.querySelector('[data-action=\"feedback-input\"]');"
+            . "var e=t && window.tinymce ? window.tinymce.get(t.id) : null;"
+            . "if (!e) { return false; }"
+            . "e.setContent({$html});"
+            . "(e.dispatch || e.fire).call(e, 'input');"
+            . "try { return require('local_unifiedgrader/dirty_tracker').isDirty('feedback'); }"
+            . " catch (x) { return false; }"
+            . "})()";
+        if (!$this->getSession()->wait(self::get_timeout() * 1000, $js)) {
+            throw new Exception('The marking panel never registered the overall feedback as unsaved.');
+        }
+    }
+
+    /**
+     * Type a grade and leave the box, where the server is expected to refuse the
+     * save, then close the refusal dialogue.
+     *
+     * @When /^I enter "(?P<value>[^"]*)" as the overall grade and close the refusal$/
+     * @param string $value Grade to type.
+     */
+    public function i_enter_as_the_overall_grade_and_close_the_refusal(string $value): void {
+        $this->find('css', '[data-action="grade-input"]')->setValue($value);
+        $this->execute_script(
+            "(function(){var i=document.querySelector('[data-action=\"grade-input\"]');"
+            . "if (i) { i.blur(); }})();"
+        );
+        $this->close_save_refusal();
+    }
+
+    /**
+     * Type a grade the server is expected to refuse, leave the box so it is sent,
+     * then type another grade while that save is still in flight, and close the
+     * refusal dialogue.
+     *
+     * One synchronous script, like the concurrent-save steps: the panel raises its
+     * in-flight flag before the AJAX promise can settle, so the second value is
+     * guaranteed to land during the round trip. The box is not left a second time,
+     * so no second save is requested.
+     *
+     * @When /^I enter "(?P<first>[^"]*)" as the overall grade, type "(?P<second>[^"]*)" before the refusal lands, and close it$/
+     * @param string $first Grade that is sent and refused.
+     * @param string $second Grade typed during the round trip.
+     */
+    public function i_enter_type_before_the_refusal_lands_and_close_it(string $first, string $second): void {
+        $this->execute('behat_general::wait_until_exists', ['[data-action="grade-input"]', 'css_element']);
+        $a = json_encode($first);
+        $b = json_encode($second);
+        $this->execute_script(
+            "(function(){var i=document.querySelector('[data-action=\"grade-input\"]');"
+            . "function type(v) { i.value = v; i.dispatchEvent(new Event('input', {bubbles: true})); }"
+            . "type({$a});"
+            . "i.dispatchEvent(new Event('focusout', {bubbles: true}));"
+            . "type({$b});"
+            . "})();"
+        );
+        $this->close_save_refusal();
+    }
+
+    /**
+     * Press "Save feedback", where the server is expected to refuse the save, then
+     * close the refusal dialogue.
+     *
+     * @When /^I save the grade and close the refusal$/
+     */
+    public function i_save_the_grade_and_close_the_refusal(): void {
+        $this->execute_script(
+            "(function(){var b=document.querySelector('[data-action=\"save-grade\"]');"
+            . "if (b) { b.click(); }})();"
+        );
+        $this->close_save_refusal();
+    }
+
+    /**
+     * Assert whether the marking panel still counts grade or feedback as unsaved.
+     *
+     * Reads the panel's own dirty tracker, which is what drives the leave-page
+     * warning, so a refusal marked as saved is visible here and nowhere else on
+     * the page.
+     *
+     * @Then /^the Unified Grader (?P<state>has|has no) unsaved (?P<type>grade|feedback) changes$/
+     * @param string $state "has" or "has no".
+     * @param string $type "grade" or "feedback".
+     */
+    public function the_unified_grader_has_unsaved_changes(string $state, string $type): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $dirty = (bool) $this->evaluate_script(
+            "require('local_unifiedgrader/dirty_tracker').isDirty('{$type}')"
+        );
+        if ($dirty !== ($state === 'has')) {
+            throw new ExpectationException(
+                $dirty
+                    ? "Expected no unsaved {$type} changes, but the panel still counts them as unsaved"
+                    : "Expected unsaved {$type} changes, but the panel counts them as saved",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Assert what the last save refusal a step closed said.
+     *
+     * The refusal steps close the dialogue before they end, so its message is kept
+     * for this step to read.
+     *
+     * @Then /^the refusal said "(?P<fragment>[^"]+)"$/
+     * @param string $fragment Text the message must contain.
+     */
+    public function the_refusal_said(string $fragment): void {
+        if (strpos($this->lastrefusal, $fragment) === false) {
+            throw new ExpectationException(
+                "Expected the refusal to say '{$fragment}', but it said '{$this->lastrefusal}'",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Wait for the save refusal dialogue and close it, inside the step that caused it.
+     *
+     * Core Behat fails any step that leaves a [data-rel="fatalerror"] element on the
+     * page, and the exception dialogue a refused AJAX save raises carries one. So a
+     * scenario can only exercise a refusal if the same step closes the dialogue and
+     * waits for it to go: it destroys itself a second after being hidden. The wait
+     * for it to appear doubles as the proof that the save really was refused.
+     */
+    private function close_save_refusal(): void {
+        $appeared = $this->getSession()->wait(
+            self::get_extended_timeout() * 1000,
+            "!!document.querySelector('[data-rel=\"fatalerror\"]')"
+        );
+        if (!$appeared) {
+            throw new ExpectationException('The save was not refused: no error dialogue appeared.', $this->getSession());
+        }
+        $this->lastrefusal = (string) $this->evaluate_script(
+            "(function(){var m=document.querySelector('.moodle-dialogue-exception .moodle-exception-message');"
+            . "return m ? m.textContent : '';})()"
+        );
+        $this->execute_script(
+            "(function(){var b=document.querySelector('.moodle-dialogue-exception .closebutton');"
+            . "if (b) { b.click(); }})();"
+        );
+        $gone = $this->getSession()->wait(
+            self::get_extended_timeout() * 1000,
+            "!document.querySelector('[data-rel=\"fatalerror\"]')"
+        );
+        if (!$gone) {
+            throw new ExpectationException('The save refusal dialogue did not close.', $this->getSession());
+        }
+    }
+
+    /**
+     * Resolve an assignment's course module id from its name.
+     *
+     * @param string $activity Assignment name.
+     * @return int Course module id.
+     */
+    private function assign_cmid(string $activity): int {
+        global $DB;
+        $cmid = $DB->get_field_sql(
+            "SELECT cm.id
+               FROM {course_modules} cm
+               JOIN {modules} m ON m.id = cm.module AND m.name = 'assign'
+               JOIN {assign} a ON a.id = cm.instance
+              WHERE a.name = :name",
+            ['name' => $activity],
+        );
+        if (!$cmid) {
+            throw new Exception("No assignment named '{$activity}' found");
+        }
+        return (int) $cmid;
+    }
+
+    /**
+     * Hide an assignment's grades from the grader's post-grades menu.
+     *
+     * Accepts the browser confirmation for the teacher, then waits for the server to
+     * hide the grade item and for the menu to re-enable, so the next step runs once
+     * the panel has handled the end of the change.
+     *
+     * @When /^I hide the grades of "(?P<activity>[^"]+)"$/
+     * @param string $activity Assignment name.
+     */
+    public function i_hide_the_grades_of(string $activity): void {
+        global $DB;
+        $assignid = (int) $DB->get_field('course_modules', 'instance', ['id' => $this->assign_cmid($activity)], MUST_EXIST);
+
+        $this->execute_script(
+            "(function(){window.confirm = function() { return true; };"
+            . "var b=document.querySelector('[data-action=\"hide-grades\"]');"
+            . "if (b) { b.click(); }})();"
+        );
+        $this->spin(
+            function () use ($assignid) {
+                global $DB;
+                $hidden = $DB->get_field('grade_items', 'hidden', [
+                    'itemtype' => 'mod',
+                    'itemmodule' => 'assign',
+                    'iteminstance' => $assignid,
+                    'itemnumber' => 0,
+                ]);
+                if ((int) $hidden !== 1) {
+                    throw new ExpectationException('The grades were not hidden', $this->getSession());
+                }
+                return true;
+            },
+            [],
+            self::get_extended_timeout()
+        );
+        $settled = $this->getSession()->wait(
+            self::get_timeout() * 1000,
+            "(function(){var b=document.querySelector('[data-action=\"post-grades-status\"]');"
+                . "return !!b && !b.disabled;})()"
+        );
+        if (!$settled) {
+            throw new ExpectationException('The post-grades menu did not settle.', $this->getSession());
+        }
     }
 
     /**

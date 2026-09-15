@@ -51,3 +51,21 @@ Feature: Manual grade override locks against subsequent rubric edits
     # Rubric total would now be 16, but the override locked, so:
     Then the overall grade shows "18"
     And I should see "Overridden"
+
+  Scenario: Overriding a rubric grade and resetting it keeps the rubric total
+    Given a rubric is attached to "Essay 1" with criteria:
+      | criterion | levels                         |
+      | Argument  | Weak:0, Sound:5, Compelling:10 |
+    When I am on the Unified Grader for activity "Essay 1"
+    And the marking panel has loaded
+    And I click on "Compelling" "button"
+    # A full rubric (10 of 10) is the whole activity grade, 20.
+    Then the rubric total shows "10 pts"
+    And the overall grade shows "20"
+    # Typing in the grade box recomputed the marking-guide total, which is always
+    # 0 on a rubric page, so the badge read "0 / 0".
+    When I enter "15" as the overall grade
+    Then the rubric total shows "10 pts"
+    # And "Reset to rubric total" wrote that 0 into the box.
+    When I click on "Reset to rubric total" "button"
+    Then the overall grade shows "20"

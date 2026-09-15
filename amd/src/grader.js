@@ -204,6 +204,11 @@ export const init = (containerId) => {
         ui: {
             loading: false,
             saving: false,
+            // True only while saveGrade runs; ui.saving is shared with other saves.
+            gradesaving: false,
+            // Set by saveGrade when the server refused the save it just ran.
+            lastsavefailed: false,
+            lastsaveerror: '',
             posting: false,
             gradesPosted: gradesPosted,
             gradesHidden: gradesHidden,

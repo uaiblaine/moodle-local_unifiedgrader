@@ -212,4 +212,111 @@ final class reset_override_test extends \advanced_testcase {
             'A penalty must not keep the override pinned after a reset.'
         );
     }
+
+    /**
+     * "--" is refused while the gradebook grade is locked.
+     *
+     * The reset clears assign_grades, but a locked cell refuses the gradebook
+     * update and clear_recoverable_gradebook_block() leaves locks alone, so the
+     * reset used to report success with the activity saying "ungraded" while the
+     * gradebook kept the mark. test_double_dash_reset_clears_the_override above is
+     * the control: a guard that refused every reset would fail that one.
+     */
+    public function test_double_dash_reset_is_refused_when_the_grade_is_locked(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $s = $this->overridden_scenario();
+
+        // Swap the override for a lock, so the lock alone is what is tested.
+        $gradegrade = \grade_grade::fetch(['itemid' => $s->itemid, 'userid' => $s->student->id]);
+        $gradegrade->set_overridden(false, false);
+        $gradegrade->locked = time();
+        $gradegrade->update();
+        $this->assertTrue(
+            \grade_item::fetch(['id' => $s->itemid])->is_locked($s->student->id),
+            'Precondition: the cell is locked.'
+        );
+        $this->assertFalse($this->is_overridden($s), 'Precondition: the cell is not also overridden.');
+
+        try {
+            \local_unifiedgrader\external\save_grade::execute(
+                (int) $s->cm->id,
+                (int) $s->student->id,
+                -1,
+                '',
+                FORMAT_HTML,
+                '',
+                0,
+                0,
+                -1,
+                true,
+            );
+            $this->fail('"--" should have been refused while the gradebook grade is locked.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('error_grade_clear_blocked_by_lock', $e->errorcode);
+        }
+
+        // Refused before anything was written: both stores still hold the mark.
+        $this->assertEquals(
+            8.0,
+            (float) $DB->get_field('assign_grades', 'grade', ['assignment' => $s->cm->instance, 'userid' => $s->student->id]),
+            'The activity grade must be untouched.'
+        );
+        $this->assertEquals(
+            8.0,
+            (float) \grade_grade::fetch(['itemid' => $s->itemid, 'userid' => $s->student->id])->finalgrade,
+            'The gradebook grade must be untouched.'
+        );
+    }
+
+    /**
+     * "--" still runs under a column lock when the student has no gradebook mark.
+     *
+     * Cleaning up after an accidental click on a student who never submitted is
+     * what "--" is for, and with no gradebook grade there is nothing a lock could
+     * keep. The locked test above is the control: a guard that refused every lock
+     * passes that one and fails this one.
+     */
+    public function test_double_dash_reset_runs_under_a_lock_when_there_is_no_mark(): void {
+        $this->resetAfterTest();
+        $gen = $this->getDataGenerator();
+        $course = $gen->create_course();
+        $assign = $gen->create_module('assign', ['course' => $course->id, 'grade' => 12.0]);
+        $cm = get_coursemodule_from_instance('assign', $assign->id);
+        $teacher = $gen->create_user();
+        $student = $gen->create_user();
+        $gen->enrol_user($teacher->id, $course->id, 'editingteacher');
+        $gen->enrol_user($student->id, $course->id, 'student');
+        $this->setUser($teacher);
+
+        $item = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $cm->instance,
+            'itemnumber' => 0,
+        ]);
+        $item->locked = time();
+        $item->update();
+        $this->assertTrue($item->is_locked($student->id), 'Precondition: the column is locked.');
+        $gradegrade = \grade_grade::fetch(['itemid' => $item->id, 'userid' => $student->id]);
+        $this->assertTrue(
+            !$gradegrade || $gradegrade->finalgrade === null,
+            'Precondition: the student has no gradebook mark.'
+        );
+
+        $result = \local_unifiedgrader\external\save_grade::execute(
+            (int) $cm->id,
+            (int) $student->id,
+            -1,
+            '',
+            FORMAT_HTML,
+            '',
+            0,
+            0,
+            -1,
+            true,
+        );
+
+        $this->assertTrue($result['success'], 'A lock with nothing under it must not block "--".');
+    }
 }
