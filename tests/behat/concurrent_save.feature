@@ -34,3 +34,16 @@ Feature: A save requested while another one is in flight is not dropped
     When I reload the page
     And the marking panel has loaded
     Then the overall grade shows "17"
+
+  Scenario: A criterion score changed during a save round trip still reaches the server
+    Given a marking guide is attached to "Essay 1" with criteria:
+      | shortname     | maxscore |
+      | Argumentation | 20       |
+    When I am on the Unified Grader for activity "Essay 1"
+    And the marking panel has loaded
+    # A criterion change saves through the debounced autosave, the path every
+    # rubric level and every ranged rubric slider takes. That path used to give
+    # up while a save was in flight, and the finishing save marked the change
+    # clean, so the student kept the first score.
+    When I score "Argumentation" "8", save, and change it to "15" before the save lands
+    Then the saved grade for "student1" on "Essay 1" is "15"

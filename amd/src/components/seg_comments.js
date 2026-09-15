@@ -83,8 +83,8 @@ const SHAPES = [
     {shape: 'circle', icon: 'fa-circle-o', key: 'annotate_shape_circle', fallback: 'Ellipse'},
     {shape: 'line', icon: 'fa-minus', key: 'annotate_shape_line', fallback: 'Line'},
     {shape: 'arrow', icon: 'fa-long-arrow-right', key: 'annotate_shape_arrow', fallback: 'Arrow'},
-    {shape: 'stamp-check', stamp: 'CHECK', icon: 'fa-check', key: 'annotate_stamp_tick', fallback: 'Tick stamp'},
-    {shape: 'stamp-cross', stamp: 'CROSS', icon: 'fa-times', key: 'annotate_stamp_cross', fallback: 'Cross stamp'},
+    {shape: 'stamp-check', stamp: 'CHECK', icon: 'fa-check', key: 'annotate_stamp_free_tick', fallback: 'Tick stamp'},
+    {shape: 'stamp-cross', stamp: 'CROSS', icon: 'fa-times', key: 'annotate_stamp_free_cross', fallback: 'Cross stamp'},
 ];
 
 /** Freehand pen brush widths (px), matching the classic annotation toolbar. */

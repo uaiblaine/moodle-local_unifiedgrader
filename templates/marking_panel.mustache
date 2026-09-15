@@ -11,6 +11,7 @@
         "uniqid": "abc123",
         "canviewnotes": true,
         "canmanagenotes": true,
+        "feedbackcommentsenabled": true,
         "hasfeedbackfileplugin": false,
         "feedbackfileshtml": ""
     }
@@ -267,7 +268,23 @@
         </div>
     </div>
 
-    {{! Overall Feedback section (collapsible, collapsed by default) }}
+    {{! Overall Feedback section (collapsible, collapsed by default).
+        Assignments with the "Feedback comments" feedback type disabled get a
+        notice instead: mod_assign would silently discard anything typed here. }}
+    {{^feedbackcommentsenabled}}
+    <div class="card mb-3" data-region="overall-feedback-disabled">
+        <div class="card-header py-2">
+            <h6 class="mb-0">{{#str}} overall_feedback, local_unifiedgrader {{/str}}</h6>
+        </div>
+        <div class="card-body py-2">
+            <span class="badge bg-warning text-dark text-wrap w-100 py-2 d-flex align-items-center justify-content-center gap-1">
+                <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+                <span>{{#str}} feedback_comments_disabled, local_unifiedgrader {{/str}}</span>
+            </span>
+        </div>
+    </div>
+    {{/feedbackcommentsenabled}}
+    {{#feedbackcommentsenabled}}
     <div class="card mb-3" data-region="overall-feedback-section">
         <div class="card-header py-2 d-flex justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2 flex-grow-1 collapsed"
@@ -333,6 +350,7 @@
             </div>
         </div>
     </div>
+    {{/feedbackcommentsenabled}}
 
     {{! Save button (standalone, always visible) }}
     <button data-action="save-grade" class="btn btn-primary w-100 mb-3" type="button">

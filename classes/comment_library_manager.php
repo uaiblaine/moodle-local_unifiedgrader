@@ -140,6 +140,14 @@ class comment_library_manager {
     public static function delete_system_comment(int $commentid): void {
         global $DB;
         require_capability('local/unifiedgrader:managesystemdefaults', \context_system::instance());
+
+        // Same guard as delete_comment(): only purge the mappings once we know
+        // the scoped delete matched a row, so passing a teacher-owned id here
+        // cannot strip that teacher's tags.
+        if (!$DB->record_exists('local_unifiedgrader_clib', ['id' => $commentid, 'userid' => 0])) {
+            return;
+        }
+
         $DB->delete_records('local_unifiedgrader_clib', ['id' => $commentid, 'userid' => 0]);
         $DB->delete_records('local_unifiedgrader_clmap', ['commentid' => $commentid]);
     }
@@ -247,6 +255,15 @@ class comment_library_manager {
      */
     public static function delete_comment(int $commentid, int $userid): void {
         global $DB;
+
+        // Confirm ownership before touching anything. delete_records() reports
+        // success whether or not it matched a row, so the mapping delete used
+        // to run even when the ownership-scoped comment delete matched nothing:
+        // a delete attempted by a non-owner left the comment in place but
+        // stripped every one of its tags, leaving it untagged and unfindable.
+        if (!$DB->record_exists('local_unifiedgrader_clib', ['id' => $commentid, 'userid' => $userid])) {
+            return;
+        }
 
         $DB->delete_records('local_unifiedgrader_clib', ['id' => $commentid, 'userid' => $userid]);
         $DB->delete_records('local_unifiedgrader_clmap', ['commentid' => $commentid]);

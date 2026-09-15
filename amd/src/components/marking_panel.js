@@ -113,6 +113,7 @@ export default class extends BaseComponent {
         this._penaltyPopout = null;
         this._gradingDefinition = null;
         this._rubricSelections = {};
+        this._rangedControls = {};
         this._guideScores = {};
         this._guideRemarks = {};
         // The teacher owns the editable form. The server is authoritative for
@@ -155,6 +156,9 @@ export default class extends BaseComponent {
         // trip finishes and re-run then (see _handleSaveGrade / _updateUI). Null
         // when nothing is waiting; otherwise {explicit: boolean, userid: number}.
         this._pendingSaveRequest = null;
+        // What the last dispatched save sent (see _formSnapshot), so a held
+        // autosave can tell a real change from a post-save re-render.
+        this._dispatchedForm = null;
         this._reportButtonLabel = 'Report academic impropriety';
         // Default label for the standalone grade-pane referral button; captured
         // from the rendered span on init, with this English fallback for safety.
@@ -1363,7 +1367,8 @@ export default class extends BaseComponent {
                 // re-run can queue a request of its own without looping.
                 const pending = this._pendingSaveRequest;
                 this._pendingSaveRequest = null;
-                if (pending && pending.userid === state.currentUser?.id) {
+                const changed = !pending?.auto || this._formSnapshot() !== this._dispatchedForm;
+                if (pending && pending.userid === state.currentUser?.id && changed) {
                     this._handleSaveGrade(pending.explicit);
                 }
             }
@@ -2142,12 +2147,18 @@ export default class extends BaseComponent {
         // for quizmanual rather than the misleading "Marking guide".
         const titleEl = this.getElement(this.selectors.RUBRIC_TITLE);
         if (titleEl) {
-            const titlekey = definition.method === 'rubric'
-                ? 'rubric'
-                : (definition.method === 'quizmanual' ? 'manuallymarkedquestions' : 'markingguide');
-            const titlefallback = definition.method === 'rubric'
-                ? 'Rubric'
-                : (definition.method === 'quizmanual' ? 'Manually marked questions' : 'Marking guide');
+            let titlekey = 'markingguide';
+            let titlefallback = 'Marking guide';
+            if (definition.method === 'rubric_ranges') {
+                titlekey = 'rangedrubric';
+                titlefallback = 'Ranged rubric';
+            } else if (definition.method === 'rubric') {
+                titlekey = 'rubric';
+                titlefallback = 'Rubric';
+            } else if (definition.method === 'quizmanual') {
+                titlekey = 'manuallymarkedquestions';
+                titlefallback = 'Manually marked questions';
+            }
             getString(titlekey, 'local_unifiedgrader')
                 .then((s) => {
                     titleEl.textContent = s;
@@ -2159,7 +2170,7 @@ export default class extends BaseComponent {
         }
 
         // Render based on method.
-        if (definition.method === 'rubric') {
+        if (definition.method === 'rubric' || definition.method === 'rubric_ranges') {
             this._renderRubric(definition, fillData, isFreshRender);
         } else if (definition.method === 'guide' || definition.method === 'quizmanual') {
             this._renderGuide(definition, fillData, isFreshRender);
@@ -2189,7 +2200,15 @@ export default class extends BaseComponent {
         if (fillData?.criteria) {
             for (const [critId, critData] of Object.entries(fillData.criteria)) {
                 if (critData.levelid) {
-                    currentFill[critId] = parseInt(critData.levelid, 10);
+                    currentFill[critId] = {
+                        levelid: parseInt(critData.levelid, 10),
+                        // Ranged criteria store the marker's awarded score
+                        // separately from the level they picked.
+                        grade: (critData.grade !== undefined && critData.grade !== null
+                                && critData.grade !== '')
+                            ? parseFloat(critData.grade)
+                            : null,
+                    };
                 }
             }
         }
@@ -2216,6 +2235,7 @@ export default class extends BaseComponent {
         // Full rebuild path.
         body.innerHTML = '';
         this._rubricSelections = {};
+        this._rangedControls = {};
 
         definition.criteria.forEach((criterion) => {
             const row = document.createElement('div');
@@ -2231,6 +2251,13 @@ export default class extends BaseComponent {
             const levelContainer = document.createElement('div');
             levelContainer.className = 'd-flex flex-wrap gap-1';
 
+            // A ranged criterion is marked against a band: the teacher picks a
+            // level and then enters the actual score inside that band. That
+            // entered score -- not the level's own score -- is what
+            // gradingform_rubric_ranges_instance::get_grade() sums.
+            const isRanged = Boolean(criterion.isranged);
+            const fill = currentFill[criterion.id] || null;
+
             criterion.levels.forEach((level) => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
@@ -2238,17 +2265,23 @@ export default class extends BaseComponent {
                 btn.dataset.levelid = level.id;
                 btn.dataset.score = level.score;
 
-                const isSelected = currentFill[criterion.id] === level.id;
+                const isSelected = fill && fill.levelid === level.id;
                 btn.className = 'btn btn-sm text-start p-2 border '
                     + (isSelected ? 'btn-primary' : 'btn-outline-secondary');
 
                 if (isSelected) {
-                    this._rubricSelections[criterion.id] = {levelid: level.id, score: level.score};
+                    this._rubricSelections[criterion.id] = {
+                        levelid: level.id,
+                        score: isRanged ? (fill.grade ?? 0) : level.score,
+                        grade: isRanged ? fill.grade : null,
+                    };
                 }
 
                 const scoreSpan = document.createElement('div');
                 scoreSpan.className = 'fw-bold small';
-                scoreSpan.textContent = level.score + ' pts';
+                scoreSpan.textContent = (isRanged && level.rangelabel)
+                    ? level.rangelabel
+                    : level.score + ' pts';
 
                 const defSpan = document.createElement('div');
                 defSpan.className = 'small';
@@ -2259,11 +2292,19 @@ export default class extends BaseComponent {
                 btn.appendChild(defSpan);
 
                 btn.addEventListener('click', () => {
-                    this._selectRubricLevel(criterion.id, level.id, level.score, levelContainer);
+                    this._selectRubricLevel(criterion.id, level.id, level.score, levelContainer, isRanged);
                 });
 
                 levelContainer.appendChild(btn);
             });
+
+            // Ranged criteria are marked on a continuous 0..points scale. The
+            // slider and the number box are two views of the same value, and
+            // the value alone decides which level (band) is selected -- so an
+            // "out of band" score cannot occur.
+            if (isRanged) {
+                this._renderRangedControls(criterion, row, levelContainer, fill);
+            }
 
             // Comment library icon for this criterion.
             const clibBtn = document.createElement('button');
@@ -2282,12 +2323,267 @@ export default class extends BaseComponent {
                 this._clibPopout.toggle(clibBtn);
             });
 
-            row.appendChild(levelContainer);
+            if (!isRanged) {
+                row.appendChild(levelContainer);
+            }
             row.appendChild(clibBtn);
             body.appendChild(row);
         });
 
         this._updateRubricTotal();
+    }
+
+    /**
+     * Derive the score bands of a ranged criterion.
+     *
+     * Levels arrive sorted ascending. Band n runs from one point above the
+     * previous level's score up to this level's score; the first band opens at
+     * zero. This mirrors gradingform_rubric_ranges_renderer::display_range_score().
+     *
+     * @param {object} criterion Criterion from the grading definition.
+     * @return {Array<object>} Bands as {levelid, start, end, definition}.
+     */
+    _bandsForCriterion(criterion) {
+        const levels = criterion.levels || [];
+        return levels.map((level, index) => ({
+            levelid: level.id,
+            start: index === 0 ? 0 : (parseFloat(levels[index - 1].score) || 0) + 1,
+            end: parseFloat(level.score) || 0,
+            definition: level.definition,
+        }));
+    }
+
+    /**
+     * Find the band a score falls in.
+     *
+     * Values above the top band clamp to it, which is what makes the slider and
+     * the level buttons impossible to disagree.
+     *
+     * @param {Array<object>} bands Bands from _bandsForCriterion.
+     * @param {number} value Score.
+     * @return {object|null} The matching band.
+     */
+    _bandForValue(bands, value) {
+        if (!bands.length) {
+            return null;
+        }
+        for (const band of bands) {
+            if (value >= band.start && value <= band.end) {
+                return band;
+            }
+        }
+        return value > bands[bands.length - 1].end ? bands[bands.length - 1] : bands[0];
+    }
+
+    /**
+     * Build the slider + number box for a ranged criterion.
+     *
+     * @param {object} criterion Criterion from the grading definition.
+     * @param {HTMLElement} row The criterion row.
+     * @param {HTMLElement} levelContainer The level-button container.
+     * @param {object|null} fill Existing fill for this criterion.
+     */
+    _renderRangedControls(criterion, row, levelContainer, fill) {
+        const bands = this._bandsForCriterion(criterion);
+        const maxPoints = Math.max(0, Math.round(parseFloat(criterion.points) || 0));
+
+        const wrap = document.createElement('div');
+        wrap.className = 'ug-ranged mt-2';
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'form-range ug-ranged-slider';
+        slider.min = '0';
+        slider.max = String(maxPoints);
+        slider.step = '1';
+        slider.id = 'ug-ranged-slider-' + criterion.id;
+        slider.dataset.criterionid = criterion.id;
+        slider.dataset.region = 'ranged-slider';
+        // Colour the track by band so the rubric's structure is visible at a
+        // glance. Colour is decorative: the band name is always shown as text.
+        // Bootstrap paints .form-range's track itself, so the gradient travels
+        // as a custom property that styles.css applies to the track pseudo-elements.
+        slider.style.setProperty('--ug-band-gradient', this._bandGradient(bands, maxPoints));
+
+        const number = document.createElement('input');
+        number.type = 'number';
+        number.className = 'form-control form-control-sm ug-ranged-number';
+        number.min = '0';
+        number.max = String(maxPoints);
+        number.step = '1';
+        number.id = 'ug-ranged-number-' + criterion.id;
+        number.dataset.criterionid = criterion.id;
+        number.dataset.region = 'ranged-grade';
+        number.setAttribute('aria-label', 'Score');
+
+        const maxLabel = document.createElement('span');
+        maxLabel.className = 'small text-muted text-nowrap';
+        maxLabel.textContent = '/ ' + maxPoints;
+
+        const bandLabel = document.createElement('span');
+        bandLabel.className = 'small text-muted ug-ranged-band';
+        bandLabel.dataset.region = 'ranged-band';
+
+        const numberWrap = document.createElement('div');
+        numberWrap.className = 'd-flex align-items-center gap-1 ug-ranged-number-wrap';
+        numberWrap.appendChild(number);
+        numberWrap.appendChild(maxLabel);
+
+        const controls = document.createElement('div');
+        controls.className = 'd-flex align-items-center gap-2 mt-1';
+        controls.appendChild(slider);
+        controls.appendChild(numberWrap);
+
+        wrap.appendChild(controls);
+        wrap.appendChild(bandLabel);
+
+        row.appendChild(levelContainer);
+        row.appendChild(wrap);
+
+        this._rangedControls[criterion.id] = {
+            slider,
+            number,
+            bandLabel,
+            bands,
+            maxPoints,
+            levelContainer,
+        };
+
+        // Drag the slider: live feedback, save on release.
+        slider.addEventListener('input', () => {
+            this._applyRangedValue(criterion.id, slider.value, {save: false});
+        });
+        slider.addEventListener('change', () => {
+            this._applyRangedValue(criterion.id, slider.value, {save: true});
+        });
+        number.addEventListener('input', () => {
+            this._applyRangedValue(criterion.id, number.value, {save: false, skipNumber: true});
+        });
+        number.addEventListener('change', () => {
+            this._applyRangedValue(criterion.id, number.value, {save: true});
+        });
+
+        const initial = (fill && fill.grade !== null && fill.grade !== undefined) ? fill.grade : null;
+        this._syncRangedControls(criterion.id, initial);
+    }
+
+    /**
+     * The colour of a band on the slider track.
+     *
+     * A sequential alpha ramp over one hue: weakest band lightest, strongest
+     * darkest. Bands are ordinal, so a single-hue ramp is the honest encoding
+     * and stays colour-blind safe.
+     *
+     * @param {number} index Band index, ascending.
+     * @param {number} count Total bands.
+     * @return {string} An rgba() colour.
+     */
+    _bandColour(index, count) {
+        const alpha = 0.18 + (0.62 * (count <= 1 ? 1 : index / (count - 1)));
+        return 'rgba(var(--bs-primary-rgb, 13, 110, 253), ' + alpha.toFixed(2) + ')';
+    }
+
+    /**
+     * Build the CSS gradient that colours a slider track by band.
+     *
+     * Boundaries sit half a point past each band's top so a single-value band
+     * (for example "0 to 0") still shows as a visible sliver.
+     *
+     * @param {Array<object>} bands Bands from _bandsForCriterion.
+     * @param {number} maxPoints Criterion maximum.
+     * @return {string} A linear-gradient value.
+     */
+    _bandGradient(bands, maxPoints) {
+        if (!bands.length || maxPoints <= 0) {
+            return '';
+        }
+        const stops = [];
+        let prev = 0;
+        bands.forEach((band, index) => {
+            const colour = this._bandColour(index, bands.length);
+            const upper = index === bands.length - 1
+                ? 100
+                : Math.min(100, ((band.end + 0.5) / maxPoints) * 100);
+            stops.push(colour + ' ' + prev.toFixed(2) + '%', colour + ' ' + upper.toFixed(2) + '%');
+            prev = upper;
+        });
+        return 'linear-gradient(to right, ' + stops.join(', ') + ')';
+    }
+
+    /**
+     * Apply a score to a ranged criterion: sync slider, box, band label and the
+     * selected level button, then record the selection.
+     *
+     * @param {number} criterionId Criterion ID.
+     * @param {string|number} rawValue The new score ('' clears it).
+     * @param {object} opts Options: save (autosave), skipNumber (leave the box alone while typing).
+     */
+    _applyRangedValue(criterionId, rawValue, opts = {}) {
+        const ctrl = this._rangedControls[criterionId];
+        if (!ctrl) {
+            return;
+        }
+
+        let value = rawValue === '' || rawValue === null ? null : parseFloat(rawValue);
+        if (value !== null && (isNaN(value) || value < 0)) {
+            value = 0;
+        }
+        if (value !== null && value > ctrl.maxPoints) {
+            value = ctrl.maxPoints;
+        }
+
+        this._syncRangedControls(criterionId, value, opts.skipNumber);
+
+        const band = value === null ? null : this._bandForValue(ctrl.bands, value);
+        if (band) {
+            this._rubricSelections[criterionId] = {
+                levelid: band.levelid,
+                score: value,
+                grade: value,
+            };
+        } else {
+            delete this._rubricSelections[criterionId];
+        }
+
+        this._updateRubricTotal();
+        DirtyTracker.markDirty('grade');
+        if (opts.save !== false) {
+            this._debouncedAutoSave();
+        }
+    }
+
+    /**
+     * Push a score into a ranged criterion's controls without recording it.
+     *
+     * @param {number} criterionId Criterion ID.
+     * @param {number|null} value The score, or null when unset.
+     * @param {boolean} skipNumber Leave the number box alone (it is being typed in).
+     */
+    _syncRangedControls(criterionId, value, skipNumber = false) {
+        const ctrl = this._rangedControls[criterionId];
+        if (!ctrl) {
+            return;
+        }
+
+        const hasValue = value !== null && value !== undefined && !isNaN(value);
+        ctrl.slider.value = String(hasValue ? value : 0);
+        if (!skipNumber) {
+            ctrl.number.value = hasValue ? String(value) : '';
+        }
+
+        const band = hasValue ? this._bandForValue(ctrl.bands, value) : null;
+        ctrl.bandLabel.textContent = band ? band.definition : '';
+        ctrl.slider.setAttribute(
+            'aria-valuetext',
+            hasValue ? value + ' — ' + (band ? band.definition : '') : 'Not marked',
+        );
+
+        // Keep the level buttons in step with the score.
+        ctrl.levelContainer.querySelectorAll('button[data-levelid]').forEach((btn) => {
+            const isActive = band && parseInt(btn.dataset.levelid, 10) === band.levelid;
+            btn.className = 'btn btn-sm text-start p-2 border '
+                + (isActive ? 'btn-primary' : 'btn-outline-secondary');
+        });
     }
 
     /**
@@ -2298,8 +2594,23 @@ export default class extends BaseComponent {
      * @param {number} score Level score.
      * @param {HTMLElement} container The level button container.
      */
-    _selectRubricLevel(criterionId, levelId, score, container) {
-        this._rubricSelections[criterionId] = {levelid: levelId, score};
+    _selectRubricLevel(criterionId, levelId, score, container, isRanged = false) {
+        if (isRanged) {
+            // Picking a band awards its top score; the teacher then adjusts
+            // down with the slider or the number box. Keep an existing score if
+            // it already sits inside the band they clicked.
+            const ctrl = this._rangedControls[criterionId];
+            const band = ctrl ? ctrl.bands.find((b) => b.levelid === levelId) : null;
+            if (band) {
+                const existing = this._rubricSelections[criterionId];
+                const current = existing ? existing.grade : null;
+                const inBand = current !== null && current !== undefined
+                    && current >= band.start && current <= band.end;
+                this._applyRangedValue(criterionId, inBand ? current : band.end, {save: true});
+                return;
+            }
+        }
+        this._rubricSelections[criterionId] = {levelid: levelId, score, grade: null};
 
         // Update button styles in this criterion.
         container.querySelectorAll('button').forEach((btn) => {
@@ -2330,18 +2641,29 @@ export default class extends BaseComponent {
         definition.criteria.forEach((criterion) => {
             const id = criterion.id;
             const idstr = String(id);
-            const serverLevelId = currentFill[id] ?? null;
+            const serverFill = currentFill[id] ?? null;
+            const isRanged = Boolean(criterion.isranged);
             let selection = null;
-            if (serverLevelId !== null) {
-                const lvl = criterion.levels.find((l) => l.id === serverLevelId);
+            if (serverFill !== null) {
+                const lvl = criterion.levels.find((l) => l.id === serverFill.levelid);
                 if (lvl) {
-                    selection = {levelid: lvl.id, score: lvl.score};
+                    selection = isRanged
+                        ? {levelid: lvl.id, score: serverFill.grade ?? 0, grade: serverFill.grade}
+                        : {levelid: lvl.id, score: lvl.score, grade: null};
                 }
             }
             if (selection) {
                 this._rubricSelections[id] = selection;
             } else {
                 delete this._rubricSelections[id];
+            }
+            if (isRanged) {
+                this._syncRangedControls(
+                    id,
+                    (selection && selection.grade !== null && selection.grade !== undefined)
+                        ? selection.grade
+                        : null,
+                );
             }
             const buttons = body.querySelectorAll(
                 'button[data-criterionid="' + idstr + '"][data-levelid]',
@@ -2370,7 +2692,17 @@ export default class extends BaseComponent {
             total += sel.score;
         }
 
-        if (Object.keys(this._rubricSelections).length < criteriaCount) {
+        // A ranged criterion needs both a level and an entered score before it
+        // counts as marked.
+        const complete = (this._gradingDefinition?.criteria || []).filter((c) => {
+            const sel = this._rubricSelections[c.id];
+            if (!sel || sel.levelid === undefined || sel.levelid === null) {
+                return false;
+            }
+            return c.isranged ? (sel.grade !== null && sel.grade !== undefined) : true;
+        }).length;
+
+        if (complete < criteriaCount) {
             allSelected = false;
         }
 
@@ -2387,6 +2719,10 @@ export default class extends BaseComponent {
         // total (e.g. 4) straight into the /100 grade field, reading as 4%
         // instead of 100%.
         const maxTotal = (this._gradingDefinition?.criteria || []).reduce((sum, c) => {
+            // A ranged criterion's ceiling is its points value, not its top level.
+            if (c.isranged) {
+                return sum + (parseFloat(c.points) || 0);
+            }
             const scores = (c.levels || []).map(l => parseFloat(l.score) || 0);
             return sum + (scores.length ? Math.max(...scores) : 0);
         }, 0);
@@ -3100,14 +3436,25 @@ export default class extends BaseComponent {
 
         const method = this._gradingDefinition.method;
 
-        if (method === 'rubric') {
+        if (method === 'rubric' || method === 'rubric_ranges') {
             // Build the criteria data in the format Moodle expects.
             const criteria = {};
             for (const [critId, sel] of Object.entries(this._rubricSelections)) {
+                // A ranged criterion can hold a score before a level is picked.
+                // Moodle's update() dereferences levelid unconditionally, so
+                // send nothing until there is one.
+                if (sel.levelid === undefined || sel.levelid === null) {
+                    continue;
+                }
                 criteria[critId] = {
                     levelid: sel.levelid,
                     remark: '',
                 };
+                // gradingform_rubric_ranges reads this per-criterion score for
+                // ranged criteria; without it the total is computed as zero.
+                if (sel.grade !== null && sel.grade !== undefined) {
+                    criteria[critId].grade = sel.grade;
+                }
             }
             return JSON.stringify({criteria});
         }
@@ -3141,10 +3488,21 @@ export default class extends BaseComponent {
 
     /**
      * Debounced auto-save — waits briefly so rapid field switches don't fire multiple saves.
-     * Skips if a save is already in progress to prevent re-render → focusout → save loops.
+     *
+     * While a save is in flight the request is held rather than dropped, the same
+     * way _handleSaveGrade holds one. Every rubric level click and every ranged
+     * rubric slider or score box saves only through here, and a slider is moved
+     * again within seconds, so a dropped request was an edit that the finishing
+     * save then marked clean without ever sending. A held autosave re-runs only
+     * if the form really differs from what the in-flight save sent, which is what
+     * keeps a post-save re-render (and the focus-out it causes) from looping.
      */
     _debouncedAutoSave() {
-        if (this._suppressAutoSave || this._saveInFlight || this.reactive.state.ui.saving) {
+        if (this._suppressAutoSave) {
+            return;
+        }
+        if (this._saveInFlight || this.reactive.state.ui.saving) {
+            this._holdAutoSave();
             return;
         }
         if (this._autoSaveTimer) {
@@ -3152,15 +3510,56 @@ export default class extends BaseComponent {
         }
         this._autoSaveTimer = setTimeout(() => {
             this._autoSaveTimer = null;
-            // Only auto-save if something actually changed and no save is in progress.
+            // Only auto-save if something actually changed.
             // This prevents the save loop where a post-save state refresh triggers
             // another empty save that clears existing marking guide fillings.
-            if (!this._suppressAutoSave && !this._saveInFlight
-                && !this.reactive.state.ui.saving
-                && (DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback'))) {
-                this._handleSaveGrade();
+            if (this._suppressAutoSave
+                || !(DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback'))) {
+                return;
             }
+            if (this._saveInFlight || this.reactive.state.ui.saving) {
+                this._holdAutoSave();
+                return;
+            }
+            this._handleSaveGrade();
         }, 1500);
+    }
+
+    /**
+     * Hold an autosave requested while a save is in flight.
+     *
+     * Never downgrades a request _handleSaveGrade already holds: that one re-runs
+     * unconditionally, and an autosave arriving on top of it must not make the
+     * re-run conditional.
+     */
+    _holdAutoSave() {
+        if (!(DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback'))) {
+            return;
+        }
+        const held = this._pendingSaveRequest;
+        this._pendingSaveRequest = {
+            explicit: !!held?.explicit,
+            auto: held ? held.auto : true,
+            userid: this.reactive.state.currentUser?.id,
+        };
+    }
+
+    /**
+     * The form as a save would send it, for telling a real change from a re-render.
+     *
+     * @return {string} Grade, feedback and criteria data, serialised.
+     */
+    _formSnapshot() {
+        const toggle = this.getElement(this.selectors.MARK_GRADED_TOGGLE);
+        const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
+        const scaleInput = this.getElement(this.selectors.SCALE_INPUT);
+        return JSON.stringify([
+            toggle ? toggle.checked : null,
+            gradeInput ? gradeInput.value : null,
+            scaleInput ? scaleInput.value : null,
+            this._getEditorContent(),
+            this._collectAdvancedGradingData(),
+        ]);
     }
 
     /**
@@ -3212,6 +3611,8 @@ export default class extends BaseComponent {
                 // Sticky, so an explicit request keeps its post-save collapse
                 // even when a background one is queued on top of it.
                 explicit: explicit || !!this._pendingSaveRequest?.explicit,
+                // Held here, it re-runs whatever the in-flight save sent.
+                auto: false,
                 // The student it was requested for. If the teacher has moved on
                 // by the time the round trip ends, the re-run would be reading
                 // somebody else's form, so it is discarded instead.
@@ -3278,6 +3679,8 @@ export default class extends BaseComponent {
         // here, past every early return, so only a genuinely dispatched save
         // arms it. A background save leaves the editor alone.
         this._collapseFeedbackAfterSave = explicit && this._editingFeedback;
+
+        this._dispatchedForm = this._formSnapshot();
 
         this.reactive.dispatch(
             'saveGrade',

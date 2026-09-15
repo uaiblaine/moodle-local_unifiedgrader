@@ -881,7 +881,7 @@ class bbb_adapter extends base_adapter {
         $advgrdmethod = $this->get_advgrd_method();
         return match ($feature) {
             'onlinetext' => true,
-            'rubric' => $advgrdmethod === 'rubric',
+            'rubric' => \local_unifiedgrader\grading_method_helper::is_rubric($advgrdmethod),
             'markingguide' => $advgrdmethod === 'guide',
             'filesubmission', 'blindmarking', 'annotations' => false,
             default => false,
@@ -922,7 +922,9 @@ class bbb_adapter extends base_adapter {
             return null;
         }
         $method = get_grading_manager($this->context, 'bbbext_advgrd', 'participation')->get_active_method();
-        return ($method === 'rubric' || $method === 'guide') ? $method : null;
+        return (\local_unifiedgrader\grading_method_helper::is_rubric($method) || $method === 'guide')
+            ? $method
+            : null;
     }
 
     /**
@@ -982,7 +984,10 @@ class bbb_adapter extends base_adapter {
             'area' => 'bbbext_advgrd/participation',
         ];
 
-        if ($method === 'rubric' && !empty($definition->rubric_criteria)) {
+        if (
+            \local_unifiedgrader\grading_method_helper::is_rubric($method)
+                && !empty($definition->rubric_criteria)
+        ) {
             $criteria = [];
             foreach ($definition->rubric_criteria as $criterionid => $criterion) {
                 $levels = [];
@@ -1002,7 +1007,16 @@ class bbb_adapter extends base_adapter {
                     'levels' => $levels,
                 ];
             }
-            $result['criteria'] = $criteria;
+            $result['criteria'] = \local_unifiedgrader\grading_method_helper::annotate_ranged_criteria(
+                $criteria,
+                $definition->rubric_criteria,
+            );
+            $result['isranged'] = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method);
+            $result['areaid'] = (int) $controller->get_areaid();
+            $result['pdfurl'] = \local_unifiedgrader\grading_method_helper::get_pdf_url(
+                $method,
+                (int) $controller->get_areaid(),
+            );
         } else if ($method === 'guide' && !empty($definition->guide_criteria)) {
             $criteria = [];
             foreach ($definition->guide_criteria as $criterionid => $criterion) {
@@ -1052,11 +1066,15 @@ class bbb_adapter extends base_adapter {
         global $DB;
 
         $resolved = [];
-        if ($method === 'rubric' && !empty($suggestions)) {
+        if (\local_unifiedgrader\grading_method_helper::is_rubric($method) && !empty($suggestions)) {
+            // Each rubric flavour keeps its levels in its own table.
+            $leveltable = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method)
+                ? 'gradingform_rubric_ranges_l'
+                : 'gradingform_rubric_levels';
             // One query per criterion is fine — definitions rarely exceed a few criteria.
             foreach ($suggestions as $cid => $score) {
                 $level = $DB->get_record_sql(
-                    "SELECT id FROM {gradingform_rubric_levels}
+                    "SELECT id FROM {{$leveltable}}
                       WHERE criterionid = :cid AND score = :score
                    ORDER BY id ASC",
                     ['cid' => (int) $cid, 'score' => (float) $score],
@@ -1095,10 +1113,11 @@ class bbb_adapter extends base_adapter {
             $instance = end($instances);
             if ($instance instanceof \gradingform_guide_instance) {
                 return $instance->get_guide_filling();
-            } else if ($instance instanceof \gradingform_rubric_instance) {
-                return $instance->get_rubric_filling();
             }
-            return null;
+
+            // Covers rubric and rubric_ranges: the ranged instance does not
+            // extend gradingform_rubric_instance, so instanceof misses it.
+            return \local_unifiedgrader\grading_method_helper::get_rubric_filling($instance);
         } catch (\Throwable $e) {
             return null;
         }

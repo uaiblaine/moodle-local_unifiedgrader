@@ -198,10 +198,18 @@ if ($cm->modname === 'forum') {
         : $defaultview;
 }
 
+// An assignment only stores overall feedback when its "Feedback comments"
+// feedback type is enabled. Otherwise mod_assign silently discards the text, so
+// the template shows a notice instead of an editor the teacher could type into
+// for nothing. Forums and quizzes always store feedback.
+$feedbackcommentsenabled = $cm->modname !== 'assign' || $adapter->has_feedback_plugin('comments');
+$templatedata['feedbackcommentsenabled'] = $feedbackcommentsenabled;
+
 // TinyMCE editor setup for the feedback textarea.
 // The textarea is rendered in the static Mustache template, so use_editor() can find it.
+// Skipped when the template renders no textarea (feedback comments disabled).
 $editor = editors_get_preferred_editor(FORMAT_HTML);
-if ($editor instanceof \editor_tiny\editor) {
+if ($feedbackcommentsenabled && $editor instanceof \editor_tiny\editor) {
     global $CFG;
     require_once($CFG->dirroot . '/repository/lib.php');
 

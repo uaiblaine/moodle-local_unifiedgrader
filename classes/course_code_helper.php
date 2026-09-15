@@ -44,8 +44,21 @@ class course_code_helper {
         }
 
         if (@preg_match($regex, $shortname, $matches)) {
-            // Return the first captured group if available, otherwise the full match.
-            return $matches[1] ?? $matches[0];
+            // Prefer the first captured group, falling back to the full match.
+            // `??` only catches null, so a group that participated in the match
+            // without capturing anything (an optional group, or one that can
+            // match zero characters) yields '' and slips straight through — and
+            // an empty code is what get_comments() treats as "universal", so the
+            // comment silently loses its course scope. Test for emptiness, not
+            // just null, and never return an empty code from a shortname that
+            // has one.
+            $code = $matches[1] ?? '';
+            if (trim($code) === '') {
+                $code = $matches[0] ?? '';
+            }
+            if (trim($code) !== '') {
+                return $code;
+            }
         }
 
         return $shortname;

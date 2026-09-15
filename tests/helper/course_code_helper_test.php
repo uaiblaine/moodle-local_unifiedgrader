@@ -114,4 +114,32 @@ final class course_code_helper_test extends \advanced_testcase {
         $this->assertEquals('THE301', course_code_helper::extract_code('THE301-2026-S2'));
         $this->assertEquals('GREEK201', course_code_helper::extract_code('GREEK201-2025-S1'));
     }
+
+    /**
+     * Test that a capturing group which participates without capturing
+     * anything does not produce an empty code.
+     *
+     * An empty code is what the comment library treats as "universal", so
+     * returning '' here silently strips a comment's course scope — a whole
+     * term's library appears to vanish while every row is still present.
+     */
+    public function test_extract_code_empty_capturing_group(): void {
+        $this->resetAfterTest();
+        // Group 1 only participates when a hyphenated suffix is present.
+        set_config('coursecode_regex', '/^[A-Z]{2,5}\d{3,4}(?:-(\w*))?/', 'local_unifiedgrader');
+
+        $this->assertEquals('S1', course_code_helper::extract_code('BIB3127-S1'));
+        $this->assertNotEquals('', course_code_helper::extract_code('BIB3129-'));
+    }
+
+    /**
+     * Test that a regex able to match zero characters falls back to the
+     * shortname rather than returning an empty code.
+     */
+    public function test_extract_code_zero_length_match(): void {
+        $this->resetAfterTest();
+        set_config('coursecode_regex', '/\d*/', 'local_unifiedgrader');
+
+        $this->assertEquals('BIB3129', course_code_helper::extract_code('BIB3129'));
+    }
 }

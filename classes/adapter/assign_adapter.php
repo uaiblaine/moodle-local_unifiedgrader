@@ -630,6 +630,22 @@ class assign_adapter extends base_adapter {
     ): bool {
         global $USER, $DB;
 
+        // With the "Feedback comments" feedback type disabled, mod_assign quietly
+        // drops any feedback text sent to it, and the save still reports success.
+        // grade.php hides the editor in that case, but a page opened before the
+        // setting changed still sends whatever the teacher typed. Refuse that
+        // save before anything is written, so the text stays in the teacher's
+        // editor instead of vanishing. Blank feedback is what the hidden editor
+        // sends, so it saves the grade as usual. The editor's draft area is
+        // ignored too, so nothing gets moved into the disabled plugin's files.
+        if (!$this->has_feedback_plugin('comments')) {
+            if (self::feedback_has_content($feedback)) {
+                throw new \moodle_exception('error_feedback_comments_disabled', 'local_unifiedgrader');
+            }
+            $feedback = '';
+            $draftitemid = 0;
+        }
+
         // Moodle's assign::save_grade() requires attemptnumber to identify
         // which submission attempt the grade applies to.
         // When attemptnumber is -1 (default), use the latest submission's attempt.
@@ -791,11 +807,15 @@ class assign_adapter extends base_adapter {
         // grade from the rubric/guide criteria, ignoring $data->grade. If the
         // admin allows manual grade overrides, apply the teacher's explicit
         // grade value after the advanced grading has been saved.
+        // Both follow-up steps below must target the attempt just graded. They
+        // used to fetch the LATEST attempt's grade, so re-saving a previous
+        // attempt put the typed mark and the feedback text on the latest attempt,
+        // overwriting its own feedback.
         if (
             $grade !== null && !empty($advancedgradingdata)
                 && get_config('local_unifiedgrader', 'allow_manual_grade_override')
         ) {
-            $gradeobj = $this->assign->get_user_grade($userid, false);
+            $gradeobj = $this->assign->get_user_grade($userid, false, $attemptnumber);
             if ($gradeobj && (float) $gradeobj->grade !== $grade) {
                 $gradeobj->grade = $grade;
                 $gradeobj->timemodified = time();
@@ -809,7 +829,7 @@ class assign_adapter extends base_adapter {
         // handled by the grading form). Move files from draft to permanent
         // storage and rewrite draftfile.php URLs to @@PLUGINFILE@@.
         if ($draftitemid > 0) {
-            $gradeobj = $this->assign->get_user_grade($userid, false);
+            $gradeobj = $this->assign->get_user_grade($userid, false, $attemptnumber);
             if ($gradeobj) {
                 $rewritten = file_save_draft_area_files(
                     $draftitemid,
@@ -1354,7 +1374,14 @@ class assign_adapter extends base_adapter {
     public function prepare_feedback_draft(int $userid, int $draftitemid, int $attemptnumber = -1): array {
         global $USER, $DB;
 
-        $grade = $this->assign->get_user_grade($userid, false) ?: null;
+        // Load the attempt on screen. Ignoring $attemptnumber loaded the LATEST
+        // attempt's feedback while a previous attempt was being viewed, and a
+        // save then wrote that text over the previous attempt's own feedback.
+        // Feedback of a disabled comments plugin is not loaded, matching
+        // build_grade_data(); grade.php renders no editor in that case.
+        $grade = $this->has_feedback_plugin('comments')
+            ? ($this->assign->get_user_grade($userid, false, $attemptnumber) ?: null)
+            : null;
         $feedbacktext = '';
 
         if ($grade) {
@@ -1760,6 +1787,24 @@ class assign_adapter extends base_adapter {
             }
         }
         return false;
+    }
+
+    /**
+     * Whether feedback HTML carries anything a student would see.
+     *
+     * Mirrors the marking panel's own emptiness check (_hasMeaningfulFeedback):
+     * an empty TinyMCE body such as "<p></p>" or "<p>&nbsp;</p>" is blank, while
+     * embedded media counts as content even with no text around it.
+     *
+     * @param string $html Feedback HTML.
+     * @return bool
+     */
+    private static function feedback_has_content(string $html): bool {
+        if (preg_match('/<(audio|video|img|object|embed|iframe)\b/i', $html)) {
+            return true;
+        }
+        $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        return trim(str_replace("\u{00A0}", ' ', $text)) !== '';
     }
 
     /**
@@ -2188,7 +2233,10 @@ class assign_adapter extends base_adapter {
             'decimalpoints' => $decimalpoints,
         ];
 
-        if ($method === 'rubric' && !empty($definition->rubric_criteria)) {
+        if (
+            \local_unifiedgrader\grading_method_helper::is_rubric($method)
+                && !empty($definition->rubric_criteria)
+        ) {
             $criteria = [];
             foreach ($definition->rubric_criteria as $criterionid => $criterion) {
                 $levels = [];
@@ -2220,7 +2268,16 @@ class assign_adapter extends base_adapter {
                     'levels' => $levels,
                 ];
             }
-            $result['criteria'] = $criteria;
+            $result['criteria'] = \local_unifiedgrader\grading_method_helper::annotate_ranged_criteria(
+                $criteria,
+                $definition->rubric_criteria,
+            );
+            $result['isranged'] = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method);
+            $result['areaid'] = (int) $controller->get_areaid();
+            $result['pdfurl'] = \local_unifiedgrader\grading_method_helper::get_pdf_url(
+                $method,
+                (int) $controller->get_areaid(),
+            );
         } else if ($method === 'guide' && !empty($definition->guide_criteria)) {
             $criteria = [];
             foreach ($definition->guide_criteria as $criterionid => $criterion) {
@@ -2269,11 +2326,11 @@ class assign_adapter extends base_adapter {
             // Each grading form type has its own filling method.
             if ($instance instanceof \gradingform_guide_instance) {
                 return $instance->get_guide_filling();
-            } else if ($instance instanceof \gradingform_rubric_instance) {
-                return $instance->get_rubric_filling();
             }
 
-            return null;
+            // Covers rubric and rubric_ranges: the ranged instance does not
+            // extend gradingform_rubric_instance, so instanceof misses it.
+            return \local_unifiedgrader\grading_method_helper::get_rubric_filling($instance);
         } catch (\Throwable $e) {
             return null;
         }

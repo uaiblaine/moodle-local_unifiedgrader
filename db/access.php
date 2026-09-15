@@ -89,6 +89,14 @@ $capabilities = [
             'manager' => CAP_ALLOW,
         ],
     ],
+    'local/unifiedgrader:moderatelibraries' => [
+        'riskbitmask' => RISK_DATALOSS | RISK_PERSONAL,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes' => [
+            'manager' => CAP_ALLOW,
+        ],
+    ],
     'local/unifiedgrader:refer' => [
         'riskbitmask' => RISK_PERSONAL,
         'captype' => 'write',

@@ -108,23 +108,34 @@ const buildTemplateContext = (definition) => {
             isGuide: false,
             description: '',
             criteria: [],
+            pdfUrl: '',
+            hasPdf: false,
         };
     }
 
     const method = definition.method;
+    // gradingform_rubric_ranges reports its method as 'rubric_ranges' but shares
+    // the rubric definition shape, so it renders through the same branch.
+    const isRubric = method === 'rubric' || method === 'rubric_ranges';
     const context = {
-        isRubric: method === 'rubric',
+        isRubric: isRubric,
         isGuide: method === 'guide',
         description: definition.description || '',
         criteria: [],
+        pdfUrl: definition.pdfurl || '',
+        hasPdf: Boolean(definition.pdfurl),
     };
 
-    if (method === 'rubric') {
+    if (isRubric) {
         context.criteria = definition.criteria.map((criterion) => ({
             description: criterion.description,
             levels: (criterion.levels || []).map((level) => ({
                 definition: level.definition,
-                scoreDisplay: '\u2013 / ' + level.score,
+                // A ranged criterion is marked against a band of scores, so show
+                // the band; an ordinary level shows the single point value.
+                scoreDisplay: (criterion.isranged && level.rangelabel)
+                    ? level.rangelabel
+                    : '\u2013 / ' + level.score,
             })),
         }));
     } else if (method === 'guide') {

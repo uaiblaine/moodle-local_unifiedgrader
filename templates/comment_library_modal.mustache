@@ -20,12 +20,18 @@
     Modal body for the full comment library management interface.
     Dynamic content (comment list, tag list, shared library) is populated by JS.
 
+    Context variables required for this template:
+    * wwwroot - string - Moodle root URL, used to link out to the teacher's
+      library organiser page.
+
     @package local_unifiedgrader
     @copyright 2026 South African Theological Seminary
     @license http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
 
     Example context (json):
-    {}
+    {
+        "wwwroot": "https://moodle.example.com"
+    }
 }}
 <div data-region="clib-modal-root">
 
@@ -65,6 +71,13 @@
                         <i class="fa fa-tags me-1"></i>
                         {{#str}} clib_manage_tags, local_unifiedgrader {{/str}}
                     </button>
+                    {{! Re-scope comments filed under the wrong course code. }}
+                    <a href="{{wwwroot}}/local/unifiedgrader/my_library.php"
+                       target="_blank" rel="noopener"
+                       class="btn btn-sm btn-outline-secondary w-100 mt-2">
+                        <i class="fa fa-folder-open me-1"></i>
+                        {{#str}} clibmod_organise, local_unifiedgrader {{/str}}
+                    </a>
                 </div>
 
                 {{! Main panel — comments }}

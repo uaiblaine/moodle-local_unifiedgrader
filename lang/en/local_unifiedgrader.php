@@ -17,12 +17,29 @@
 /**
  * Language strings for local_unifiedgrader.
  *
+ * Strings are in strcmp order, which Moodle's LangFilesOrdering sniff requires
+ * and which leaves no room for the section comments this file used to carry.
+ * Three notes from those comments are worth keeping:
+ *
+ * - "Dual file" is deliberately not called "split": layout_both already owns
+ *   the word "Split" for the preview/grading arrangement, and the two controls
+ *   sit together.
+ * - The tick/cross labels are written as a matched pair and must each make
+ *   sense read on their own. "Correct (cross)" relied on the reader taking
+ *   "correct" as a verb -- on a cross it can be read as "this is correct",
+ *   the opposite of the mark.
+ * - The submission-translation strings are fallbacks, used only when the
+ *   matching local_nida string is absent.
+ *
  * @package    local_unifiedgrader
  * @copyright  2026 South African Theological Seminary (mathieu@sats.ac.za)
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 defined('MOODLE_INTERNAL') || die();
+
+// General.
+
 $string['action_add_override'] = 'Add override';
 $string['action_clear_overrides'] = 'Clear all overrides';
 $string['action_delete_extension'] = 'Delete extension';
@@ -59,9 +76,10 @@ $string['annotate_shape_circle'] = 'Circle';
 $string['annotate_shape_line'] = 'Line';
 $string['annotate_shape_rect'] = 'Rectangle';
 $string['annotate_stamp_check'] = 'Checkmark stamp';
-$string['annotate_stamp_cross'] = 'Cross stamp (place anywhere)';
+$string['annotate_stamp_cross'] = 'Cross stamp';
+$string['annotate_stamp_free_cross'] = 'Cross stamp (place anywhere)';
+$string['annotate_stamp_free_tick'] = 'Tick stamp (place anywhere)';
 $string['annotate_stamp_question'] = 'Question stamp';
-$string['annotate_stamp_tick'] = 'Tick stamp (place anywhere)';
 $string['annotate_stamps'] = 'Stamps';
 $string['annotate_strikethrough'] = 'Strikethrough text';
 $string['annotate_text_highlight'] = 'Highlight text';
@@ -170,6 +188,105 @@ $string['clib_tags'] = 'Tags';
 $string['clib_title'] = 'Comment Library';
 $string['clib_universal'] = 'Universal';
 $string['clib_universal_help'] = 'Visible in all my courses';
+$string['clibcsv_empty_file'] = 'The file is empty.';
+$string['clibcsv_import_errors'] = 'Some rows could not be imported: {$a}';
+$string['clibcsv_import_result'] = 'Imported {$a->imported}, skipped {$a->skipped} (already present or blank).';
+$string['clibcsv_missing_content_column'] = 'The file has no \'content\' column.';
+$string['clibcsv_need_owner_filter'] = 'Set an owner filter above, or include an \"ownerid\" column in the file, so every row has somewhere to go.';
+$string['clibcsv_no_file'] = 'No file was uploaded.';
+$string['clibcsv_row_bad_owner'] = 'Row {$a}: the ownerid does not match an existing, active user — skipped.';
+$string['clibcsv_row_no_owner'] = 'Row {$a}: no owner could be determined — skipped.';
+$string['clibmod_anomalies_only'] = 'Show only libraries with anomalies';
+$string['clibmod_apply_filters'] = 'Apply filters';
+$string['clibmod_back_to_list'] = '← Back to all libraries';
+$string['clibmod_bucket_heading'] = 'Comments owned by {$a->owner}, filed under {$a->code}';
+$string['clibmod_clear_filters'] = 'Clear';
+$string['clibmod_coursecode'] = 'Course code';
+$string['clibmod_created'] = 'Created';
+$string['clibmod_delete_button'] = 'Delete selected';
+$string['clibmod_delete_confirm'] = 'Delete the selected comments? This cannot be undone.';
+$string['clibmod_delete_heading'] = 'Delete comments';
+$string['clibmod_delete_help'] = 'Tick comments above, then delete them. This cannot be undone.';
+$string['clibmod_deleted'] = '{$a} comment(s) deleted.';
+$string['clibmod_duplicates_confirm'] = 'Delete the extra copies, keeping the oldest? This cannot be undone.';
+$string['clibmod_duplicates_copies'] = 'Copies';
+$string['clibmod_duplicates_found'] = '{$a} group(s) of duplicate comments found.';
+$string['clibmod_duplicates_heading'] = 'Possible duplicate comments';
+$string['clibmod_duplicates_keep_oldest'] = 'Delete {$a} extra copy/copies, keep oldest';
+$string['clibmod_export_all'] = 'Export all libraries (CSV)';
+$string['clibmod_export_bucket'] = 'Export this bucket (CSV)';
+$string['clibmod_export_mine'] = 'Export my library (CSV)';
+$string['clibmod_filter_code'] = 'Course code contains';
+$string['clibmod_filter_user'] = 'Owner user ID';
+$string['clibmod_flag_deletedowner'] = 'Owner deleted';
+$string['clibmod_flag_noowner'] = 'Owner missing';
+$string['clibmod_flag_paddedcode'] = 'Padded code';
+$string['clibmod_flag_sentinelcode'] = 'Sentinel stored as code';
+$string['clibmod_flag_systemwithcode'] = 'System default with a course code';
+$string['clibmod_flag_unknowncode'] = 'Code matches no course';
+$string['clibmod_flag_variantcode'] = 'Competing spellings of one code';
+$string['clibmod_flags'] = 'Anomalies';
+$string['clibmod_hidden_course'] = 'Hidden';
+$string['clibmod_import_bucket_heading'] = 'Import into this bucket';
+$string['clibmod_import_bucket_help'] = 'Every imported row is filed under this owner and this course code, regardless of any coursecode column in the file. Rows already present (same content) are skipped rather than duplicated.';
+$string['clibmod_import_csv'] = 'CSV file';
+$string['clibmod_import_csv_button'] = 'Import';
+$string['clibmod_import_csv_help'] = 'Imports into the filtered owner\'s library. Rows already present (same owner, code and content) are skipped rather than duplicated, so re-running an import is safe.';
+$string['clibmod_import_csv_help_nofilter'] = 'Filter to one teacher above, or include an \"ownerid\" column in the file, so every row has an owner to import into. Rows already present (same owner, code and content) are skipped rather than duplicated.';
+$string['clibmod_import_legacy'] = 'Import legacy comments';
+$string['clibmod_inspect'] = 'Inspect';
+$string['clibmod_intro'] = 'Comment library entries are scoped by a course code string rather than a link to a course, so an entry can end up filed where its owner will never look for it. This page finds those entries and moves them back.';
+$string['clibmod_invalid_owner'] = 'That user does not exist, or has been deleted. Comments cannot be reassigned to them.';
+$string['clibmod_inventory_heading'] = 'Libraries';
+$string['clibmod_lastmodified'] = 'Last modified';
+$string['clibmod_legacy_course'] = 'Original course';
+$string['clibmod_legacy_course_gone'] = 'Course deleted';
+$string['clibmod_legacy_found'] = '{$a} comment(s) are still sitting in the pre-v2 table and were never migrated.';
+$string['clibmod_legacy_heading'] = 'Unmigrated legacy comments';
+$string['clibmod_legacy_import_help'] = 'Copies these into the current library, skipping any the owner already has. Safe to run more than once.';
+$string['clibmod_legacy_imported'] = '{$a} legacy comment(s) imported.';
+$string['clibmod_legacy_wouldbecode'] = 'Would be filed as';
+$string['clibmod_maps_purged'] = '{$a} orphaned tag mapping(s) removed.';
+$string['clibmod_matching_courses'] = 'Matching courses';
+$string['clibmod_missing_owner'] = 'Deleted user (id {$a})';
+$string['clibmod_my_bucket_heading'] = 'Comments filed under {$a}';
+$string['clibmod_my_import_csv_help'] = 'Rows already in your library (same code and content) are skipped rather than duplicated, so re-running an import is safe. A coursecode column in the file sets the course; without one, rows become universal.';
+$string['clibmod_my_library'] = 'Organise my comment library';
+$string['clibmod_my_library_empty'] = 'You have no saved comments yet.';
+$string['clibmod_my_library_intro'] = 'Your saved comments, grouped by the course they are filed under. If comments you wrote in one course are showing up under Universal or under the wrong code, move them here.';
+$string['clibmod_my_recode_help'] = 'Tick the comments to move, then choose the course code to file them under. Leave the box empty to make them universal (visible in every course you teach).';
+$string['clibmod_my_universal_heading'] = 'Universal comments';
+$string['clibmod_newcode_placeholder'] = 'Course code (blank = universal)';
+$string['clibmod_newowner_placeholder'] = 'New owner user ID';
+$string['clibmod_no_anomalies'] = 'No anomalies found in the libraries matching these filters.';
+$string['clibmod_no_comments'] = 'No comments in this bucket.';
+$string['clibmod_no_duplicates'] = 'No duplicate comments found.';
+$string['clibmod_no_legacy'] = 'Nothing left in the pre-v2 comments table.';
+$string['clibmod_no_matching_course'] = 'No course on this site produces this code';
+$string['clibmod_no_orphanmaps'] = 'No orphaned tag mappings.';
+$string['clibmod_nothing_found'] = 'No libraries match these filters.';
+$string['clibmod_numcomments'] = 'Comments';
+$string['clibmod_organise'] = 'Organise library';
+$string['clibmod_orphanmaps_found'] = '{$a} tag mapping(s) point at a comment or tag that no longer exists.';
+$string['clibmod_orphanmaps_heading'] = 'Orphaned tag mappings';
+$string['clibmod_owner'] = 'Owner';
+$string['clibmod_owner_deleted'] = 'Deleted';
+$string['clibmod_owner_suspended'] = 'Suspended';
+$string['clibmod_pagename'] = 'Moderate comment libraries';
+$string['clibmod_purge_maps'] = 'Remove orphaned mappings';
+$string['clibmod_reassign_button'] = 'Reassign selected';
+$string['clibmod_reassign_heading'] = 'Move to another owner';
+$string['clibmod_reassign_help'] = 'Use this to rescue a library whose owner record was replaced — for example after a duplicate account was merged. The comments keep their course code and tags.';
+$string['clibmod_reassigned'] = '{$a} comment(s) reassigned.';
+$string['clibmod_recode_button'] = 'Re-scope selected';
+$string['clibmod_recode_heading'] = 'Move to another course code';
+$string['clibmod_recode_help'] = 'Tick the comments to move, then enter the course code to file them under. Leave the box empty to make them universal — visible to their owner in every course.';
+$string['clibmod_recoded'] = '{$a->count} comment(s) re-scoped to {$a->code}.';
+$string['clibmod_shared'] = 'Shared';
+$string['clibmod_summary_heading'] = 'Anomaly summary';
+$string['clibmod_system_owner'] = 'System defaults';
+$string['clibmod_truncated'] = 'Showing the first {$a->shown} of {$a->total} libraries. The anomaly summary above covers all {$a->total}; narrow the filters to reach the rest of the table.';
+$string['clibmod_universal'] = 'Universal';
 $string['commentlibrary'] = 'Comment library';
 $string['comments_on_document'] = 'Comments on your document';
 $string['comments_on_submission'] = 'Comments on your submission';
@@ -222,12 +339,14 @@ $string['docinfo_translated_words'] = 'Translated words';
 $string['docinfo_wordcount'] = 'Word count';
 $string['docinfo_words'] = 'Words (translated)';
 $string['document_page'] = 'Page {$a}';
+$string['download_criteria_pdf'] = 'Download criteria (PDF)';
 $string['download_feedback_pdf'] = 'Download feedback PDF';
 $string['download_original_submission'] = 'Download original submission: {$a}';
 $string['edit'] = 'Edit';
 $string['edit_feedback'] = 'Edit';
 $string['editing'] = 'Editing...';
 $string['error_criterion_score_not_numeric'] = 'Marking-guide scores must be numbers. Please correct any non-numeric marks and save again.';
+$string['error_feedback_comments_disabled'] = 'Feedback comments are not enabled for this assessment, so the overall feedback could not be saved. Nothing was saved. Copy your feedback somewhere safe, then reload the page.';
 $string['error_file_not_found'] = 'Source file not found.';
 $string['error_grade_clear_blocked_by_gradebook'] = 'This student is graded in the gradebook with a locked or overridden grade, so clearing the grade here would not take effect. Open the gradebook, remove the override (or unlock the grade) for this student, then clear it again from the Unified Grader. To clear the grade and remove an accidental submission row in one step, type -- instead.';
 $string['error_grade_exceeds_max'] = 'Grade cannot exceed the activity maximum ({$a}). Extra credit is not currently supported.';
@@ -239,6 +358,7 @@ $string['error_offline_comments'] = 'Cannot add comments while offline.';
 $string['error_pdf_combine_failed'] = 'Failed to combine PDF files: {$a}';
 $string['error_proposal_already_pending'] = 'A proposal for this comment is already pending review.';
 $string['event_feedback_viewed'] = 'Feedback viewed';
+$string['event_library_repaired'] = 'Comment library repaired';
 $string['expand'] = 'Expand';
 $string['expandfilters'] = 'Show filters';
 $string['extension_close_auto_adjust'] = 'If the extension date is after the quiz close date ({$a}), the close date override will be automatically adjusted to match.';
@@ -247,6 +367,7 @@ $string['extension_cutoff_forum_warning'] = 'Note: The forum cut-off date is {$a
 $string['extension_granted'] = 'Extension granted';
 $string['feedback'] = 'Feedback';
 $string['feedback_banner_default'] = 'Your teacher has provided feedback on your submission.';
+$string['feedback_comments_disabled'] = 'Feedback comments are not enabled for this assessment';
 $string['feedback_not_available'] = 'Your feedback is not yet available. Please check back after your submission has been graded and released.';
 $string['feedback_saved'] = 'Feedback (saved)';
 $string['feedback_summary_generated_by'] = 'Generated by Unified Grader';
@@ -466,6 +587,8 @@ $string['quiz_post_grades_disabled'] = 'Post grades is not available for quizzes
 $string['quiz_post_grades_no_schedule'] = 'Scheduling is not available for quizzes. Use Post or Unpost instead.';
 $string['quiz_select_attempt'] = 'Select attempt';
 $string['quiz_your_attempt'] = 'Your Attempt';
+$string['rangedrubric'] = 'Ranged rubric';
+$string['rangedscore'] = 'Score';
 $string['rating_aggregate_of'] = '{$a->value} ({$a->count} ratings)';
 $string['rating_aggregate_one'] = '{$a->value} (1 rating)';
 $string['rating_badge_title'] = '{$a->method} across {$a->count} rating(s)';
@@ -618,6 +741,7 @@ $string['translationpending'] = 'Translation pending.';
 $string['unifiedgrader:grade'] = 'Use the Unified Grader to grade';
 $string['unifiedgrader:managenotes'] = 'Create and edit private teacher notes';
 $string['unifiedgrader:managesystemdefaults'] = 'Manage system default comment-library tags and comments';
+$string['unifiedgrader:moderatelibraries'] = 'Audit and repair teachers\' comment libraries';
 $string['unifiedgrader:refer'] = 'Refer submissions for an academic-integrity review';
 $string['unifiedgrader:sharecomments'] = 'Share comments in the library with other teachers';
 $string['unifiedgrader:viewall'] = 'View all students in the Unified Grader';

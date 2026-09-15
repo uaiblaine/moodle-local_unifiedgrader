@@ -672,6 +672,56 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
+     * Score a marking-guide criterion and save, then change the score and leave
+     * the guide while that save is still in flight.
+     *
+     * The second change reaches the server only through the panel's debounced
+     * autosave, which is the path every rubric level click and every ranged
+     * rubric slider takes. It used to return early whenever a save was in
+     * flight, and the finishing save then marked the unsent change clean.
+     *
+     * One synchronous script for the same reason as the grade-box variant
+     * above: the "Save feedback" click raises the in-flight flag before the
+     * AJAX promise can settle, so the change is guaranteed to land mid-flight.
+     * Focus is handed to the page body so the guide's focus-out handler takes
+     * its immediate branch rather than deferring.
+     *
+     * @When /^I score "(?P<criterion>[^"]+)" "(?P<first>[^"]*)", save, and change it to "(?P<second>[^"]*)" before the save lands$/
+     * @param string $criterion Criterion shortname, as shown in its heading.
+     * @param string $first Score saved first.
+     * @param string $second Score set while that save is in flight.
+     */
+    public function i_score_save_and_change_before_the_save_lands(string $criterion, string $first, string $second): void {
+        $this->execute(
+            'behat_general::wait_until_exists',
+            ['input[data-criterionid]:not([data-levelid])', 'css_element'],
+        );
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $name = json_encode($criterion);
+        $a = json_encode($first);
+        $b = json_encode($second);
+        $js = "(function(){"
+            . "var input = Array.from(document.querySelectorAll('input[data-criterionid]:not([data-levelid])'))"
+            . ".find(function(el) {"
+            . "var row = el.closest('.border-bottom');"
+            . "var heading = row && row.querySelector('.fw-bold');"
+            . "return heading && heading.textContent.trim() === {$name};"
+            . "});"
+            . "function score(v) {"
+            . "input.focus();"
+            . "input.value = v;"
+            . "input.dispatchEvent(new Event('input', {bubbles: true}));"
+            . "input.dispatchEvent(new Event('change', {bubbles: true}));"
+            . "}"
+            . "score({$a});"
+            . "document.querySelector('[data-action=\"save-grade\"]').click();"
+            . "score({$b});"
+            . "input.dispatchEvent(new FocusEvent('focusout', {bubbles: true, relatedTarget: document.body}));"
+            . "})();";
+        $this->execute_script($js);
+    }
+
+    /**
      * Assert the grade the server actually stored for a student, waiting for it.
      *
      * Reads the database rather than the page, because the point of the
