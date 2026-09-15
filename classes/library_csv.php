@@ -42,6 +42,12 @@ class library_csv {
     /** @var string Separator between tag names within one CSV cell. */
     private const TAG_SEPARATOR = '|';
 
+    /** @var int Longest course code local_unifiedgrader_clib stores (char 255 in install.xml). */
+    public const MAX_CODE_LENGTH = 255;
+
+    /** @var int Longest tag name local_unifiedgrader_cltag stores (char 50 in install.xml). */
+    private const MAX_TAG_LENGTH = 50;
+
     /**
      * Export one owner's library (optionally restricted to one course code).
      *
@@ -52,21 +58,35 @@ class library_csv {
     public static function export_for_owner(int $userid, ?string $coursecode = null): string {
         global $DB;
 
-        $where = 'userid = :userid';
-        $params = ['userid' => $userid];
-        if ($coursecode !== null) {
-            $where .= ' AND coursecode = :coursecode';
-            $params['coursecode'] = $coursecode;
-        }
-
-        $records = $DB->get_records_select(
+        $records = $DB->get_records(
             'local_unifiedgrader_clib',
-            $where,
-            $params,
+            ['userid' => $userid],
             'coursecode ASC, timecreated ASC',
         );
+        // The code is matched in PHP rather than with coursecode = :coursecode. MariaDB's
+        // default collation folds case and ignores trailing spaces, so that predicate
+        // exported a different set of rows for the same bucket there than on PostgreSQL.
+        if ($coursecode !== null) {
+            $records = array_filter($records, fn($r) => $r->coursecode === $coursecode);
+        }
 
         return self::build_csv($records, false);
+    }
+
+    /**
+     * Whether a user exporting a bucket is its owner, and so needs no moderation capability.
+     *
+     * Both ids are compared as ints. $USER->id comes back from the database as a string on
+     * every supported driver while the requested owner is cleaned as PARAM_INT, so comparing
+     * the two raw values strictly never matched, and every teacher exporting their own bucket
+     * was asked for local/unifiedgrader:moderatelibraries.
+     *
+     * @param int $owner Owner of the bucket being exported.
+     * @param int $viewerid The user asking for the export.
+     * @return bool
+     */
+    public static function is_bucket_owner(int $owner, int $viewerid): bool {
+        return $owner === $viewerid;
     }
 
     /**
@@ -121,12 +141,14 @@ class library_csv {
         fputcsv($fh, $header, escape: '\\');
 
         foreach ($records as $r) {
-            $tags = implode(self::TAG_SEPARATOR, $tagnames[(int) $r->id] ?? []);
+            $tags = self::escape_cell(implode(self::TAG_SEPARATOR, $tagnames[(int) $r->id] ?? []));
+            $coursecode = self::escape_cell((string) $r->coursecode);
+            $content = self::escape_cell((string) $r->content);
             if ($includeowner) {
-                $ownername = isset($r->firstname) ? trim($r->firstname . ' ' . $r->lastname) : '';
-                fputcsv($fh, [$r->userid, $ownername, $r->coursecode, $r->shared, $tags, $r->content], escape: '\\');
+                $ownername = self::escape_cell(isset($r->firstname) ? trim($r->firstname . ' ' . $r->lastname) : '');
+                fputcsv($fh, [$r->userid, $ownername, $coursecode, $r->shared, $tags, $content], escape: '\\');
             } else {
-                fputcsv($fh, [$r->coursecode, $r->shared, $tags, $r->content], escape: '\\');
+                fputcsv($fh, [$coursecode, $r->shared, $tags, $content], escape: '\\');
             }
         }
 
@@ -135,6 +157,47 @@ class library_csv {
         fclose($fh);
 
         return $csv;
+    }
+
+    /**
+     * Neutralise a cell that a spreadsheet would read as a formula.
+     *
+     * A cell starting with =, +, - or @ is evaluated as a formula when the file is opened in
+     * a spreadsheet, and a leading tab or carriage return can be read as one too. Comment
+     * text, tag names and owner names are written by teachers, so an export must not hand
+     * them to whoever opens it as live formulas. Such a cell gets a leading single quote,
+     * which spreadsheets take as "this is text" and do not display.
+     *
+     * A cell that already starts with a quote gets one as well. That is what keeps the rule
+     * reversible: an exported cell starts with a quote only when this method put it there,
+     * so unescape_cell() can always remove exactly one.
+     *
+     * @param string $value Cell text.
+     * @return string
+     */
+    private static function escape_cell(string $value): string {
+        if ($value !== '' && strpos("=+-@\t\r'", $value[0]) !== false) {
+            return "'" . $value;
+        }
+        return $value;
+    }
+
+    /**
+     * Undo escape_cell() on a cell read back from a CSV file.
+     *
+     * Only a quote escape_cell() could have added is removed: one followed by a character it
+     * quotes. A cell that merely starts with a quote, as "'Tis well argued" does in a file written
+     * by hand or exported before cells were quoted, keeps it, so re-importing such a file still
+     * finds the comment already present instead of adding a second, altered copy.
+     *
+     * @param string $value Cell text.
+     * @return string
+     */
+    private static function unescape_cell(string $value): string {
+        if (strlen($value) > 1 && $value[0] === "'" && strpos("=+-@\t\r'", $value[1]) !== false) {
+            return substr($value, 1);
+        }
+        return $value;
     }
 
     /**
@@ -159,6 +222,11 @@ class library_csv {
         bool $forcecoursecode = false,
     ): array {
         global $DB;
+
+        // Excel's "CSV UTF-8" starts the file with a byte order mark. Left in place it became
+        // part of the first header name, so that column (coursecode or ownerid, in the shapes
+        // this class exports) was never found. Core's csv_import_reader strips it the same way.
+        $csvcontent = \core_text::trim_utf8_bom($csvcontent);
 
         $fh = fopen('php://temp', 'r+');
         fwrite($fh, $csvcontent);
@@ -186,6 +254,7 @@ class library_csv {
         $skipped = 0;
         $errors = [];
         $tagcache = [];
+        $existing = [];
         $now = time();
         $rownum = 1;
 
@@ -196,7 +265,16 @@ class library_csv {
                 continue;
             }
 
-            $content = trim((string) ($row[$colindex['content']] ?? ''));
+            // Every cell must be valid UTF-8 before any of it reaches a query. PostgreSQL rejects
+            // an invalid byte sequence even as a SELECT parameter, and the exception used to abort
+            // the import part way through, keeping the rows before it and returning no summary.
+            $row = self::row_to_utf8($row);
+            if ($row === null) {
+                $errors[] = get_string('clibcsv_row_bad_encoding', 'local_unifiedgrader', $rownum);
+                continue;
+            }
+
+            $content = trim(self::unescape_cell((string) ($row[$colindex['content']] ?? '')));
             if ($content === '') {
                 $skipped++;
                 continue;
@@ -222,7 +300,29 @@ class library_csv {
 
             $coursecode = (string) ($defaultcoursecode ?? '');
             if (!$forcecoursecode && isset($colindex['coursecode'])) {
-                $coursecode = trim((string) ($row[$colindex['coursecode']] ?? ''));
+                $coursecode = trim(self::unescape_cell((string) ($row[$colindex['coursecode']] ?? '')));
+            }
+
+            $tagnames = [];
+            if (isset($colindex['tags'])) {
+                $tagnames = array_filter(array_map(
+                    'trim',
+                    explode(self::TAG_SEPARATOR, self::unescape_cell((string) ($row[$colindex['tags']] ?? ''))),
+                ), fn($t) => $t !== '');
+            }
+
+            // Lengths are checked before anything is written. The comment row is inserted before
+            // its tags, so a tag too long for its column used to leave the comment behind, untagged,
+            // when the tag insert failed and took the rest of the import down with it.
+            if (\core_text::strlen($coursecode) > self::MAX_CODE_LENGTH) {
+                $errors[] = get_string('clibcsv_row_coursecode_too_long', 'local_unifiedgrader', $rownum);
+                continue;
+            }
+            foreach ($tagnames as $tagname) {
+                if (\core_text::strlen($tagname) > self::MAX_TAG_LENGTH) {
+                    $errors[] = get_string('clibcsv_row_tag_too_long', 'local_unifiedgrader', $rownum);
+                    continue 2;
+                }
             }
 
             $shared = 0;
@@ -236,13 +336,20 @@ class library_csv {
             // makes re-running an import (e.g. after fixing earlier errors)
             // harmless rather than adding a second copy of everything that
             // already succeeded.
-            $exists = $DB->record_exists_select(
-                'local_unifiedgrader_clib',
-                'userid = :userid AND coursecode = :coursecode AND ' .
-                    $DB->sql_compare_text('content', 255) . ' = ' . $DB->sql_compare_text(':content', 255),
-                ['userid' => $userid, 'coursecode' => $coursecode, 'content' => $content],
-            );
-            if ($exists) {
+            //
+            // Compared in PHP, not with a coursecode = :coursecode AND content
+            // = :content predicate: MariaDB's default collation folds case and
+            // ignores trailing spaces, so that predicate skipped a row there
+            // that PostgreSQL imported, for the same file.
+            if (!isset($existing[$userid])) {
+                $existing[$userid] = [];
+                $ownerrows = $DB->get_records('local_unifiedgrader_clib', ['userid' => $userid], '', 'id, coursecode, content');
+                foreach ($ownerrows as $ownerrow) {
+                    $existing[$userid][$ownerrow->coursecode . "\0" . $ownerrow->content] = true;
+                }
+            }
+            $duplicatekey = $coursecode . "\0" . $content;
+            if (isset($existing[$userid][$duplicatekey])) {
                 $skipped++;
                 continue;
             }
@@ -256,23 +363,17 @@ class library_csv {
                 'timecreated' => $now,
                 'timemodified' => $now,
             ]);
+            $existing[$userid][$duplicatekey] = true;
 
-            if (isset($colindex['tags'])) {
-                $tagnames = array_filter(array_map(
-                    'trim',
-                    explode(self::TAG_SEPARATOR, (string) ($row[$colindex['tags']] ?? '')),
-                ), fn($t) => $t !== '');
-
-                foreach ($tagnames as $tagname) {
-                    $cachekey = $userid . ':' . strtolower($tagname);
-                    if (!isset($tagcache[$cachekey])) {
-                        $tagcache[$cachekey] = self::find_or_create_tag($userid, $tagname);
-                    }
-                    $DB->insert_record('local_unifiedgrader_clmap', (object) [
-                        'commentid' => $commentid,
-                        'tagid' => $tagcache[$cachekey],
-                    ]);
+            foreach ($tagnames as $tagname) {
+                $cachekey = $userid . ':' . strtolower($tagname);
+                if (!isset($tagcache[$cachekey])) {
+                    $tagcache[$cachekey] = self::find_or_create_tag($userid, $tagname);
                 }
+                $DB->insert_record('local_unifiedgrader_clmap', (object) [
+                    'commentid' => $commentid,
+                    'tagid' => $tagcache[$cachekey],
+                ]);
             }
 
             $imported++;
@@ -281,6 +382,69 @@ class library_csv {
         fclose($fh);
 
         return ['imported' => $imported, 'skipped' => $skipped, 'errors' => $errors];
+    }
+
+    /**
+     * The notice an import page shows for a result of import().
+     *
+     * It names the rows that were rejected as well as the counts. A row rejected for its encoding,
+     * a course code or tag that is too long, or an owner that cannot be resolved is neither imported
+     * nor skipped, so a notice built from the two counts alone lost it without a word.
+     *
+     * @param array $result Output of import().
+     * @return string
+     */
+    public static function import_result_message(array $result): string {
+        $message = get_string('clibcsv_import_result', 'local_unifiedgrader', (object) [
+            'imported' => $result['imported'],
+            'skipped' => $result['skipped'],
+        ]);
+        if (!empty($result['errors'])) {
+            $message .= ' ' . get_string(
+                'clibcsv_import_errors',
+                'local_unifiedgrader',
+                implode('; ', array_slice($result['errors'], 0, 5)),
+            );
+        }
+        return $message;
+    }
+
+    /**
+     * Whether a moderation-page import may take each row's owner from an "ownerid" column.
+     *
+     * Only when no owner filter is set. Once an admin has filtered the page to one teacher,
+     * the import goes into that teacher's library whatever the file says, as the page's help
+     * text promises; an ownerid column used to override the filter row by row.
+     *
+     * @param int $filteruser Owner filter on the moderation page (0 = none).
+     * @return bool
+     */
+    public static function allow_owner_column_for_filter(int $filteruser): bool {
+        return $filteruser === 0;
+    }
+
+    /**
+     * Make every cell of a CSV row valid UTF-8, or report that one cannot be.
+     *
+     * A cell that is not valid UTF-8 is read as Windows-1252, which is what Excel on Windows
+     * writes when a file is saved as plain "CSV", by far the usual source of such a file. A
+     * cell that is still not valid UTF-8 after that is left for the caller to report.
+     *
+     * @param array $row One row as fgetcsv() returns it.
+     * @return array|null The row with every cell valid UTF-8, or null when one cannot be converted.
+     */
+    private static function row_to_utf8(array $row): ?array {
+        foreach ($row as $index => $cell) {
+            if (!is_string($cell) || mb_check_encoding($cell, 'UTF-8')) {
+                continue;
+            }
+            $converted = \core_text::convert($cell, 'windows-1252', 'utf-8');
+            if (!is_string($converted) || !mb_check_encoding($converted, 'UTF-8')) {
+                return null;
+            }
+            $row[$index] = $converted;
+        }
+        return $row;
     }
 
     /**

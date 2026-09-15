@@ -53,7 +53,7 @@ if ($scope === 'mine') {
     // Exporting your own bucket needs nothing beyond being logged in — this
     // is what the teacher self-service page's bucket-scoped export link
     // uses. Exporting anyone else's requires the moderation capability.
-    if ($owner !== $USER->id) {
+    if (!library_csv::is_bucket_owner($owner, $USER->id)) {
         require_capability('local/unifiedgrader:moderatelibraries', context_system::instance());
     }
 

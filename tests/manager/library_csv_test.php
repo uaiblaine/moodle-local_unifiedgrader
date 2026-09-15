@@ -341,4 +341,284 @@ final class library_csv_test extends \advanced_testcase {
             'tagid' => $tag->id,
         ]));
     }
+
+    /**
+     * The bucket owner check compares ids as ints.
+     *
+     * export_library_csv.php passes the requested owner, cleaned as PARAM_INT, and $USER->id,
+     * which the database returns as a string. Compared raw and strictly they never matched, so
+     * a teacher was asked for the moderation capability to export their own bucket. This tests the
+     * method; library_pages_test is what checks that the page still calls it.
+     */
+    public function test_is_bucket_owner_compares_ids_as_ints(): void {
+        $this->resetAfterTest();
+        $teacher = $this->getDataGenerator()->create_user();
+
+        $this->assertTrue(library_csv::is_bucket_owner((int) $teacher->id, (string) $teacher->id));
+        $this->assertFalse(library_csv::is_bucket_owner((int) $teacher->id, (string) ($teacher->id + 1)));
+    }
+
+    /**
+     * A UTF-8 byte order mark before the header does not hide the first column.
+     *
+     * Excel's "CSV UTF-8" writes one. It used to become part of the first header name, so a
+     * cross-owner file lost its ownerid column and every row went to the fallback owner.
+     */
+    public function test_import_strips_a_utf8_byte_order_mark(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $target = $generator->create_user();
+        $fallback = $generator->create_user();
+
+        $csv = \core_text::UTF8_BOM . "ownerid,content\n{$target->id},Routed despite the mark\n";
+        $result = library_csv::import($csv, $fallback->id, null, true);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame(1, $DB->count_records('local_unifiedgrader_clib', ['userid' => $target->id]));
+        $this->assertSame(0, $DB->count_records('local_unifiedgrader_clib', ['userid' => $fallback->id]));
+    }
+
+    /**
+     * Cells in Windows-1252, what Excel on Windows writes for plain "CSV", are converted.
+     *
+     * They used to reach the duplicate-check query as invalid UTF-8, which PostgreSQL rejects,
+     * aborting the import part way through.
+     */
+    public function test_import_converts_windows_1252_cells(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $teacher = $this->getDataGenerator()->create_user();
+
+        // 0xE9 is a lone "é" in Windows-1252, and not valid UTF-8.
+        $csv = "coursecode,tags,content\nBIB3129,R\xE9sum\xE9,Caf\xE9\n";
+        $result = library_csv::import($csv, $teacher->id);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame([], $result['errors']);
+        $record = $DB->get_record('local_unifiedgrader_clib', ['userid' => $teacher->id]);
+        $this->assertSame("Caf\u{00E9}", $record->content);
+        $this->assertTrue($DB->record_exists('local_unifiedgrader_cltag', [
+            'userid' => $teacher->id,
+            'name' => "R\u{00E9}sum\u{00E9}",
+        ]));
+    }
+
+    /**
+     * A cell that is neither UTF-8 nor convertible Windows-1252 is a row error, and the import carries on.
+     *
+     * 0x81 has no character in Windows-1252, so the conversion fails and the row is reported
+     * rather than sent to the database, where PostgreSQL would reject it and abort the import.
+     */
+    public function test_import_reports_a_cell_that_cannot_be_converted(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $teacher = $this->getDataGenerator()->create_user();
+
+        $csv = "coursecode,content\nBIB3129,Bad \x81 byte\nBIB3129,Fine\n";
+        $result = library_csv::import($csv, $teacher->id);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame([get_string('clibcsv_row_bad_encoding', 'local_unifiedgrader', 2)], $result['errors']);
+        $contents = array_map(fn($r) => $r->content, $DB->get_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+        $this->assertSame(['Fine'], array_values($contents));
+    }
+
+    /**
+     * A course code longer than its column is a row error, and the import carries on.
+     *
+     * The insert used to throw, taking the rest of the file with it.
+     */
+    public function test_import_reports_a_course_code_longer_than_the_column(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $teacher = $this->getDataGenerator()->create_user();
+
+        $csv = "coursecode,content\n" . str_repeat('X', 256) . ",Code too long\nBIB3129,Fine\n";
+        $result = library_csv::import($csv, $teacher->id);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame([get_string('clibcsv_row_coursecode_too_long', 'local_unifiedgrader', 2)], $result['errors']);
+        $contents = array_map(fn($r) => $r->content, $DB->get_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+        $this->assertSame(['Fine'], array_values($contents));
+    }
+
+    /**
+     * A tag longer than its column is a row error raised before the comment is written.
+     *
+     * The comment used to be inserted first, so the failing tag insert left it behind, untagged.
+     */
+    public function test_import_reports_a_tag_longer_than_the_column_before_writing_the_comment(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $teacher = $this->getDataGenerator()->create_user();
+
+        $csv = "coursecode,tags,content\nBIB3129," . str_repeat('Y', 51) . ",Tag too long\nBIB3129,Short,Fine\n";
+        $result = library_csv::import($csv, $teacher->id);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame([get_string('clibcsv_row_tag_too_long', 'local_unifiedgrader', 2)], $result['errors']);
+        $contents = array_map(fn($r) => $r->content, $DB->get_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+        $this->assertSame(['Fine'], array_values($contents));
+    }
+
+    /**
+     * Cells a spreadsheet would evaluate as formulas are exported with a leading quote.
+     *
+     * Plain text is left alone, and a cell that already starts with a quote gets another,
+     * which is what lets import remove exactly one.
+     */
+    public function test_export_quotes_cells_a_spreadsheet_would_evaluate(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $teacher = $generator->create_user();
+
+        $contents = ['=HYPERLINK("https://example.com")', '+1', '-Needs work', '@SUM(1,1)', "\t=1", "\r=1", "'quoted", 'Plain'];
+        foreach ($contents as $index => $content) {
+            $plugingen->create_library_comment([
+                'userid' => $teacher->id,
+                'coursecode' => 'C' . $index,
+                'content' => $content,
+            ]);
+        }
+        $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => '=CODE', 'content' => 'Code cell']);
+
+        $bycode = [];
+        foreach ($this->parse(library_csv::export_for_owner($teacher->id)) as $row) {
+            $bycode[$row['coursecode']] = $row['content'];
+        }
+
+        foreach ($contents as $index => $content) {
+            $expected = $content === 'Plain' ? 'Plain' : "'" . $content;
+            $this->assertSame($expected, $bycode['C' . $index]);
+        }
+        $this->assertSame('Code cell', $bycode["'=CODE"]);
+    }
+
+    /**
+     * Quoted cells import back to exactly what was exported, leading quotes included.
+     *
+     * This guards that escape_cell() and unescape_cell() stay inverse. It also passes on code that
+     * quotes nothing at all, so the regression test for the quoting is the export test above.
+     */
+    public function test_quoted_cells_survive_an_export_and_import_round_trip(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $owner = $generator->create_user();
+        $restored = $generator->create_user();
+
+        $contents = ["'=2 is not the same as 2", '=SUM(1,1)', "'Tis well argued", 'Plain'];
+        foreach ($contents as $content) {
+            $plugingen->create_library_comment(['userid' => $owner->id, 'coursecode' => 'BIB3129', 'content' => $content]);
+        }
+
+        $result = library_csv::import(library_csv::export_for_owner($owner->id), $restored->id);
+
+        $this->assertSame(count($contents), $result['imported']);
+        $imported = array_values(array_map(
+            fn($r) => $r->content,
+            $DB->get_records('local_unifiedgrader_clib', ['userid' => $restored->id]),
+        ));
+        sort($contents);
+        sort($imported);
+        $this->assertSame($contents, $imported);
+    }
+
+    /**
+     * A filtered moderation-page import never lets an ownerid column override the filter.
+     */
+    public function test_allow_owner_column_for_filter(): void {
+        $this->assertTrue(library_csv::allow_owner_column_for_filter(0));
+        $this->assertFalse(library_csv::allow_owner_column_for_filter(42));
+    }
+
+    /**
+     * The duplicate check tells course codes apart by case, on every database.
+     *
+     * On MariaDB the old query's collation treated 'bib3129' as the existing 'BIB3129' and
+     * skipped the row, which PostgreSQL imported.
+     */
+    public function test_import_duplicate_check_is_case_exact(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $teacher = $generator->create_user();
+        $generator->get_plugin_generator('local_unifiedgrader')->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+            'content' => 'Already here',
+        ]);
+
+        $result = library_csv::import("coursecode,content\nbib3129,Already here\n", $teacher->id);
+
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame(0, $result['skipped']);
+        $this->assertSame(2, $DB->count_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+    }
+
+    /**
+     * A bucket export contains that bucket only, not a trailing-space variant of its code.
+     *
+     * Only MariaDB, whose collation ignores trailing spaces, exported both buckets before the code
+     * was matched in PHP; PostgreSQL never did, so this fails on the old code on MariaDB alone.
+     */
+    public function test_bucket_export_matches_the_course_code_exactly(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $teacher = $generator->create_user();
+        $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => 'BIB3129', 'content' => 'Exact']);
+        $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => 'BIB3129 ', 'content' => 'Padded']);
+
+        $rows = $this->parse(library_csv::export_for_owner($teacher->id, 'BIB3129'));
+
+        $this->assertSame(['Exact'], array_column($rows, 'content'));
+    }
+
+    /**
+     * A cell that merely starts with a quote keeps it on import.
+     *
+     * Files exported before cells were quoted, or written by hand, hold such a cell as it is.
+     * Removing the quote turned "'Tis well argued" into a different comment, so re-importing a
+     * backup added a second, altered copy instead of skipping the one already there.
+     */
+    public function test_import_keeps_a_leading_quote_that_is_not_an_escape(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $teacher = $generator->create_user();
+        $generator->get_plugin_generator('local_unifiedgrader')->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+            'content' => "'Tis well argued",
+        ]);
+
+        $result = library_csv::import("coursecode,content\nBIB3129,'Tis well argued\n", $teacher->id);
+
+        $this->assertSame(0, $result['imported']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertSame(1, $DB->count_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+    }
+
+    /**
+     * The import notice names the rejected rows as well as the counts.
+     *
+     * The teacher's own import and the bucket import built their notice from the counts alone, so a
+     * row rejected for its encoding or a value too long for its column disappeared without a word.
+     */
+    public function test_import_result_message_names_rejected_rows(): void {
+        $this->resetAfterTest();
+        $result = ['imported' => 1, 'skipped' => 0, 'errors' => ['Row 2: rejected']];
+
+        $message = library_csv::import_result_message($result);
+
+        $this->assertStringContainsString(
+            get_string('clibcsv_import_result', 'local_unifiedgrader', (object) ['imported' => 1, 'skipped' => 0]),
+            $message
+        );
+        $this->assertStringContainsString('Row 2: rejected', $message);
+    }
 }
