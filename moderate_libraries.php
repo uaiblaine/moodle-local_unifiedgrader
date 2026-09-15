@@ -78,7 +78,19 @@ if ($action === 'recode') {
     require_sesskey();
     $commentids = optional_param_array('commentids', [], PARAM_INT);
     $newcode = trim(optional_param('newcode', '', PARAM_TEXT));
-    $changed = library_audit::recode_comments($commentids, $newcode);
+    try {
+        $changed = library_audit::recode_comments($commentids, $newcode);
+    } catch (moodle_exception $e) {
+        if ($e->errorcode !== 'clibmod_code_too_long') {
+            throw $e;
+        }
+        redirect(
+            $listurl,
+            get_string('clibmod_code_too_long', 'local_unifiedgrader'),
+            null,
+            \core\output\notification::NOTIFY_ERROR,
+        );
+    }
     local_unifiedgrader_log_repair('recode', $changed, $newcode);
     redirect(
         $listurl,
@@ -141,23 +153,18 @@ if ($action === 'importcsv') {
         );
     }
 
-    $result = library_csv::import($csvcontent, $filteruser, null, true, false);
+    $result = library_csv::import(
+        $csvcontent,
+        $filteruser,
+        null,
+        library_csv::allow_owner_column_for_filter($filteruser),
+        false,
+    );
     local_unifiedgrader_log_repair('importcsv', $result['imported'], 'skipped ' . $result['skipped']);
 
-    $message = get_string('clibcsv_import_result', 'local_unifiedgrader', (object) [
-        'imported' => $result['imported'],
-        'skipped' => $result['skipped'],
-    ]);
-    if (!empty($result['errors'])) {
-        $message .= ' ' . get_string(
-            'clibcsv_import_errors',
-            'local_unifiedgrader',
-            implode('; ', array_slice($result['errors'], 0, 5)),
-        );
-    }
     redirect(
         $listurl,
-        $message,
+        library_csv::import_result_message($result),
         null,
         empty($result['errors']) ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING,
     );
@@ -183,13 +190,9 @@ if ($action === 'importbucket') {
     $result = library_csv::import($csvcontent, $importowner, $importcode, false, true);
     local_unifiedgrader_log_repair('importbucket', $result['imported'], 'userid ' . $importowner . ' code ' . $importcode);
 
-    $message = get_string('clibcsv_import_result', 'local_unifiedgrader', (object) [
-        'imported' => $result['imported'],
-        'skipped' => $result['skipped'],
-    ]);
     redirect(
         $viewurl,
-        $message,
+        library_csv::import_result_message($result),
         null,
         empty($result['errors']) ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING,
     );
@@ -200,12 +203,8 @@ echo $OUTPUT->header();
 // Drill-down: the individual comments behind one owner + code bucket.
 if ($action === 'view') {
     $comments = library_audit::get_comments_for($owner, $code);
-    $ownername = $owner === 0
-        ? get_string('clibmod_system_owner', 'local_unifiedgrader')
-        : fullname($DB->get_record('user', ['id' => $owner], '*', IGNORE_MISSING) ?: (object) [
-            'firstname' => get_string('clibmod_missing_owner', 'local_unifiedgrader', $owner),
-            'lastname' => '',
-        ]);
+    $ownerrecord = $owner === 0 ? null : ($DB->get_record('user', ['id' => $owner], '*', IGNORE_MISSING) ?: null);
+    $ownername = library_audit::describe_owner($owner, $ownerrecord);
 
     echo $OUTPUT->heading(
         get_string('clibmod_bucket_heading', 'local_unifiedgrader', (object) [
@@ -297,6 +296,7 @@ if ($action === 'view') {
         echo html_writer::empty_tag('input', [
             'type' => 'text',
             'name' => 'newcode',
+            'maxlength' => library_csv::MAX_CODE_LENGTH,
             'list' => 'clibmod-known-codes',
             'class' => 'form-control w-auto',
             'placeholder' => get_string('clibmod_newcode_placeholder', 'local_unifiedgrader'),

@@ -57,7 +57,19 @@ if ($action === 'recode') {
     $newcode = trim(optional_param('newcode', '', PARAM_TEXT));
 
     // The owner argument is what confines this to the teacher's own rows.
-    $changed = library_audit::recode_comments($commentids, $newcode, $USER->id);
+    try {
+        $changed = library_audit::recode_comments($commentids, $newcode, $USER->id);
+    } catch (moodle_exception $e) {
+        if ($e->errorcode !== 'clibmod_code_too_long') {
+            throw $e;
+        }
+        redirect(
+            $baseurl,
+            get_string('clibmod_code_too_long', 'local_unifiedgrader'),
+            null,
+            \core\output\notification::NOTIFY_ERROR,
+        );
+    }
 
     \local_unifiedgrader\event\library_repaired::create([
         'context' => $context,
@@ -118,13 +130,9 @@ if ($action === 'importcsv') {
         ],
     ])->trigger();
 
-    $message = get_string('clibcsv_import_result', 'local_unifiedgrader', (object) [
-        'imported' => $result['imported'],
-        'skipped' => $result['skipped'],
-    ]);
     redirect(
         $baseurl,
-        $message,
+        library_csv::import_result_message($result),
         null,
         empty($result['errors']) ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING,
     );
@@ -371,6 +379,7 @@ echo html_writer::start_div('d-flex align-items-center gap-2 flex-wrap');
 echo html_writer::empty_tag('input', [
     'type' => 'text',
     'name' => 'newcode',
+    'maxlength' => library_csv::MAX_CODE_LENGTH,
     'list' => 'mylib-known-codes',
     'class' => 'form-control w-auto',
     'placeholder' => get_string('clibmod_newcode_placeholder', 'local_unifiedgrader'),

@@ -129,10 +129,10 @@ final class library_audit_test extends \advanced_testcase {
      * so it gets its own flag — and the padded and clean spellings are also
      * reported as competing variants of one code.
      *
-     * Leading whitespace is used deliberately: MySQL's collation ignores
-     * *trailing* spaces and case when comparing, so those spellings collapse
-     * into one bucket at the database level and there is nothing to report.
-     * A leading space is significant on every supported database.
+     * Leading whitespace is used here because it is significant on every
+     * supported database; case and trailing-space variants, which MariaDB's
+     * collation compares as equal, are covered by
+     * test_inventory_keeps_variants_the_collation_would_merge().
      */
     public function test_padded_code_is_flagged_as_padded_and_variant(): void {
         $this->resetAfterTest();
@@ -152,6 +152,34 @@ final class library_audit_test extends \advanced_testcase {
         $this->assertContains(library_audit::FLAG_PADDED_CODE, $padded['flags']);
         $this->assertContains(library_audit::FLAG_VARIANT_CODE, $padded['flags']);
         $this->assertContains(library_audit::FLAG_VARIANT_CODE, $clean['flags']);
+    }
+
+    /**
+     * The inventory lists each exact spelling of a code as its own bucket.
+     *
+     * On MariaDB the GROUP BY merged 'BIB3129', 'bib3129' and 'BIB3129 ' into one row whose count
+     * covered all three, while the bucket view it links to now matches exactly and showed one
+     * comment; the other spellings could not be opened from the page at all.
+     */
+    public function test_inventory_keeps_variants_the_collation_would_merge(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $teacher = $generator->create_user();
+        foreach (['BIB3129', 'bib3129', 'BIB3129 '] as $code) {
+            $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => $code]);
+        }
+
+        $inventory = library_audit::get_inventory((int) $teacher->id);
+
+        $this->assertSame(['BIB3129', 'BIB3129 ', 'bib3129'], array_column($inventory, 'coursecode'));
+        foreach ($inventory as $row) {
+            $this->assertSame(
+                count(library_audit::get_comments_for((int) $teacher->id, $row['coursecode'])),
+                $row['numcomments'],
+            );
+            $this->assertContains(library_audit::FLAG_VARIANT_CODE, $row['flags']);
+        }
     }
 
     /**
@@ -677,5 +705,167 @@ final class library_audit_test extends \advanced_testcase {
         $plugingen->create_library_comment(['userid' => $two->id, 'content' => 'Same words']);
 
         $this->assertSame([], library_audit::find_duplicate_comments());
+    }
+
+    /**
+     * The site-wide duplicate finder, as the unfiltered moderation page calls it, finds a real group.
+     *
+     * The owner-scope test above only proves the site-wide call returns nothing for two owners,
+     * which a branch returning nothing at all would also satisfy.
+     */
+    public function test_find_duplicate_comments_sitewide_finds_a_real_group(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $teacher = $generator->create_user();
+
+        $older = $plugingen->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+            'content' => 'Repeated comment',
+            'timecreated' => 1000,
+        ]);
+        $newer = $plugingen->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+            'content' => 'Repeated comment',
+            'timecreated' => 2000,
+        ]);
+
+        $groups = library_audit::find_duplicate_comments();
+
+        $this->assertCount(1, $groups);
+        $this->assertSame((int) $teacher->id, $groups[0]['userid']);
+        $this->assertSame([(int) $older->id, (int) $newer->id], array_column($groups[0]['comments'], 'id'));
+    }
+
+    /**
+     * A suspended owner is reported as suspended.
+     *
+     * The owner query had lost the comma before the name fields, so "suspended" became an alias
+     * for firstnamephonetic and the flag could never be set.
+     */
+    public function test_suspended_owner_is_reported(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $generator->create_course(['shortname' => 'BIB3129']);
+        $teacher = $generator->create_user(['suspended' => 1]);
+        $generator->get_plugin_generator('local_unifiedgrader')->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+        ]);
+
+        $row = $this->row_for(library_audit::get_inventory(), (int) $teacher->id, 'BIB3129');
+
+        $this->assertTrue($row['ownersuspended']);
+        $this->assertFalse($row['ownerdeleted']);
+        $this->assertSame(fullname($teacher), $row['ownername']);
+    }
+
+    /**
+     * An owner with no user row is labelled from the lang string, which the bucket view now uses too.
+     */
+    public function test_describe_owner_labels_a_missing_owner(): void {
+        $this->resetAfterTest();
+
+        $this->assertSame(
+            get_string('clibmod_missing_owner', 'local_unifiedgrader', 999999),
+            library_audit::describe_owner(999999, null)
+        );
+    }
+
+    /**
+     * Re-scoping to a code longer than the column is refused before anything is written.
+     *
+     * The UPDATE used to throw a database error instead, aborting the page.
+     */
+    public function test_recode_refuses_a_code_longer_than_the_column(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $teacher = $generator->create_user();
+        $comment = $generator->get_plugin_generator('local_unifiedgrader')->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'BIB3129',
+        ]);
+
+        try {
+            library_audit::recode_comments([$comment->id], str_repeat('Z', 256));
+            $this->fail('A code longer than 255 characters must be refused.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('clibmod_code_too_long', $e->errorcode);
+        }
+
+        $this->assertSame('BIB3129', $DB->get_field('local_unifiedgrader_clib', 'coursecode', ['id' => $comment->id]));
+    }
+
+    /**
+     * Reassigning reports the comments that exist, not the number of ids requested.
+     */
+    public function test_reassign_counts_only_comments_that_exist(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $from = $generator->create_user();
+        $to = $generator->create_user();
+        $comment = $generator->get_plugin_generator('local_unifiedgrader')->create_library_comment([
+            'userid' => $from->id,
+        ]);
+
+        $changed = library_audit::reassign_comments([$comment->id, 999999], $to->id);
+
+        $this->assertSame(1, $changed);
+        $this->assertSame((int) $to->id, (int) $DB->get_field('local_unifiedgrader_clib', 'userid', ['id' => $comment->id]));
+    }
+
+    /**
+     * A bucket view returns that bucket only, not a trailing-space variant of its code.
+     *
+     * On MariaDB the query's collation ignored the trailing space and returned both.
+     */
+    public function test_get_comments_for_matches_the_course_code_exactly(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $teacher = $generator->create_user();
+        $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => 'BIB3129', 'content' => 'Exact bucket']);
+        $plugingen->create_library_comment(['userid' => $teacher->id, 'coursecode' => 'BIB3129 ', 'content' => 'Padded bucket']);
+
+        $comments = library_audit::get_comments_for($teacher->id, 'BIB3129');
+
+        $this->assertSame(['Exact bucket'], array_column($comments, 'content'));
+    }
+
+    /**
+     * The legacy import keeps a comment whose code differs only by case from an existing one.
+     *
+     * On MariaDB the old match treated the existing 'bib3129' row as the legacy comment's copy,
+     * skipped the insert, and then deleted the legacy row: the comment was gone from both tables.
+     */
+    public function test_legacy_import_keeps_a_case_variant(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+
+        $course = $generator->create_course(['shortname' => 'BIB3129']);
+        $teacher = $generator->create_user();
+        $plugingen->create_library_comment([
+            'userid' => $teacher->id,
+            'coursecode' => 'bib3129',
+            'content' => 'Legacy feedback',
+        ]);
+        $plugingen->create_legacy_comment([
+            'userid' => $teacher->id,
+            'courseid' => $course->id,
+            'content' => 'Legacy feedback',
+        ]);
+
+        $imported = library_audit::import_legacy($teacher->id);
+
+        $this->assertSame(1, $imported);
+        $codes = array_map(fn($r) => $r->coursecode, $DB->get_records('local_unifiedgrader_clib', ['userid' => $teacher->id]));
+        sort($codes);
+        $this->assertSame(['BIB3129', 'bib3129'], $codes);
     }
 }

@@ -1010,6 +1010,52 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * Blank feedback on a comments-disabled assignment leaves a draft file where it is.
+     *
+     * The test above cannot tell: a disabled comments plugin never writes a comment row, with or
+     * without save_grade() zeroing the draft item id. This one puts a real file in the draft area,
+     * which the draft rewrite would otherwise move into the disabled plugin's file area, where no
+     * comment row owns it.
+     */
+    public function test_blank_feedback_when_comments_disabled_moves_no_draft_file(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/filelib.php');
+        $this->resetAfterTest();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario(['modparams' => ['assignfeedback_comments_enabled' => 0]]);
+        $studentid = (int) $s->scenario->students[0]->id;
+        $this->setUser($s->scenario->students[0]);
+        $plugingen->create_assign_submission($s->scenario->activity, $studentid);
+        $this->setUser($s->scenario->teacher);
+
+        $draftitemid = file_get_unused_draft_itemid();
+        $fs = get_file_storage();
+        $usercontext = \context_user::instance($s->scenario->teacher->id);
+        $fs->create_file_from_string([
+            'contextid' => $usercontext->id,
+            'component' => 'user',
+            'filearea' => 'draft',
+            'itemid' => $draftitemid,
+            'filepath' => '/',
+            'filename' => 'stays.txt',
+        ], 'should stay in the draft area');
+        $this->assertCount(
+            1,
+            $fs->get_area_files($usercontext->id, 'user', 'draft', $draftitemid, 'id', false),
+            'Precondition: the draft area holds a file that a save could move.'
+        );
+
+        $this->assertTrue($s->adapter->save_grade($studentid, 70.0, '', FORMAT_HTML, [], $draftitemid));
+
+        $this->assertSame(
+            [],
+            $fs->get_area_files($s->scenario->context->id, 'assignfeedback_comments', 'feedback', false, 'id', false),
+            'No file may be moved into the disabled comments plugin\'s file area.'
+        );
+    }
+
+    /**
      * Seed a student with two submitted attempts (0 and 1, 1 being latest).
      *
      * Mirrors the Behat "has N graded submission attempts" step: the core

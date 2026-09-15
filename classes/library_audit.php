@@ -163,28 +163,38 @@ class library_audit {
             $params['codefilter'] = '%' . $DB->sql_like_escape(trim($codefilter)) . '%';
         }
 
-        // Group on the library table alone and resolve owners separately.
-        // Joining {user} here would force every name field into the GROUP BY,
-        // and fullname() needs the full set of name fields to avoid emitting
-        // a debugging warning.
-        $sql = "SELECT c.userid,
-                       c.coursecode,
-                       COUNT(c.id) AS numcomments,
-                       SUM(c.shared) AS numshared,
-                       MIN(c.timecreated) AS firstcreated,
-                       MAX(c.timemodified) AS lastmodified
+        // Aggregate in PHP, keyed on the exact course code, and resolve owners
+        // separately. A GROUP BY compares codes under the database collation,
+        // which on MariaDB merges case and trailing-space variants into one row
+        // that the exact-matching bucket view and export cannot then open.
+        $sql = "SELECT c.userid, c.coursecode, c.shared, c.timecreated, c.timemodified
                   FROM {local_unifiedgrader_clib} c
-                 WHERE " . implode(' AND ', $where) . "
-              GROUP BY c.userid, c.coursecode
-              ORDER BY c.userid ASC, c.coursecode ASC";
+                 WHERE " . implode(' AND ', $where);
 
         $rows = $DB->get_recordset_sql($sql, $params);
 
         $collected = [];
         foreach ($rows as $row) {
-            $collected[] = $row;
+            $key = (int) $row->userid . "\0" . (string) $row->coursecode;
+            if (!isset($collected[$key])) {
+                $collected[$key] = (object) [
+                    'userid' => (int) $row->userid,
+                    'coursecode' => (string) $row->coursecode,
+                    'numcomments' => 0,
+                    'numshared' => 0,
+                    'firstcreated' => (int) $row->timecreated,
+                    'lastmodified' => (int) $row->timemodified,
+                ];
+            }
+            $bucket = $collected[$key];
+            $bucket->numcomments++;
+            $bucket->numshared += (int) $row->shared;
+            $bucket->firstcreated = min($bucket->firstcreated, (int) $row->timecreated);
+            $bucket->lastmodified = max($bucket->lastmodified, (int) $row->timemodified);
         }
         $rows->close();
+
+        uasort($collected, fn($a, $b) => ($a->userid <=> $b->userid) ?: strcmp($a->coursecode, $b->coursecode));
 
         $owners = self::load_owners(array_map(fn($r) => (int) $r->userid, $collected));
         $usagebynormal = self::get_code_usage();
@@ -233,7 +243,10 @@ class library_audit {
     private static function get_code_usage(): array {
         global $DB;
 
-        $sql = "SELECT DISTINCT coursecode
+        // Distinct in PHP: SELECT DISTINCT uses the database collation, which on
+        // MariaDB returns one spelling for 'BIB3129' and 'bib3129', so the pair
+        // was never reported as competing variants there.
+        $sql = "SELECT coursecode
                   FROM {local_unifiedgrader_clib}";
 
         $usage = [];
@@ -242,10 +255,10 @@ class library_audit {
             if (trim($rawcode) === '') {
                 continue;
             }
-            $usage[self::normalise_code($rawcode)][] = $rawcode;
+            $usage[self::normalise_code($rawcode)][$rawcode] = $rawcode;
         }
 
-        return $usage;
+        return array_map('array_values', $usage);
     }
 
     /**
@@ -269,7 +282,7 @@ class library_audit {
         [$insql, $params] = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED, 'uid');
 
         return $DB->get_records_sql(
-            "SELECT id, deleted, suspended {$namefields}
+            "SELECT id, deleted, suspended, {$namefields}
                FROM {user}
               WHERE id {$insql}",
             $params,
@@ -340,13 +353,17 @@ class library_audit {
     }
 
     /**
-     * Human-readable owner label for an inventory row.
+     * Human-readable label for a library owner.
+     *
+     * Used for inventory rows and for the bucket view heading. An owner with no user row is
+     * labelled from the lang string rather than through fullname(), which needs every name
+     * field and raises a debugging notice for a partial user object.
      *
      * @param int $ownerid The stored owner id.
      * @param object|null $owner The resolved user record, or null if there is none.
      * @return string
      */
-    private static function describe_owner(int $ownerid, ?object $owner): string {
+    public static function describe_owner(int $ownerid, ?object $owner): string {
         if ($ownerid === 0) {
             return get_string('clibmod_system_owner', 'local_unifiedgrader');
         }
@@ -366,10 +383,13 @@ class library_audit {
     public static function get_comments_for(int $userid, string $coursecode): array {
         global $DB;
 
-        $records = $DB->get_records(
-            'local_unifiedgrader_clib',
-            ['userid' => $userid, 'coursecode' => $coursecode],
-            'timecreated ASC',
+        // The code is matched in PHP rather than in the query. MariaDB's default collation
+        // folds case and ignores trailing spaces, so a coursecode = :coursecode predicate
+        // returned the rows of 'bib3129' and 'BIB3129 ' for bucket 'BIB3129' there, and only
+        // that bucket's rows on PostgreSQL.
+        $records = array_filter(
+            $DB->get_records('local_unifiedgrader_clib', ['userid' => $userid], 'timecreated ASC'),
+            fn($r) => $r->coursecode === $coursecode,
         );
 
         if (empty($records)) {
@@ -505,6 +525,11 @@ class library_audit {
         if (empty($commentids)) {
             return 0;
         }
+        // Refused before the UPDATE, as reassign_comments() refuses a bad owner. A code longer
+        // than the column made the database throw instead, aborting the page with an error.
+        if (\core_text::strlen($newcode) > library_csv::MAX_CODE_LENGTH) {
+            throw new \moodle_exception('clibmod_code_too_long', 'local_unifiedgrader');
+        }
 
         [$insql, $params] = $DB->get_in_or_equal($commentids, SQL_PARAMS_NAMED, 'cid');
         $where = "id {$insql}";
@@ -551,17 +576,26 @@ class library_audit {
             throw new \moodle_exception('clibmod_invalid_owner', 'local_unifiedgrader');
         }
 
+        // Read first so the count reflects rows that exist, not the size of the requested
+        // set, as recode_comments() and delete_comments() do. The count goes into the
+        // library_repaired event, the tool's only audit trail.
         [$insql, $params] = $DB->get_in_or_equal($commentids, SQL_PARAMS_NAMED, 'cid');
-        $params['newuserid'] = $newuserid;
-        $params['now'] = time();
+        $targets = $DB->get_fieldset_select('local_unifiedgrader_clib', 'id', "id {$insql}", $params);
+        if (empty($targets)) {
+            return 0;
+        }
+
+        [$targetsql, $targetparams] = $DB->get_in_or_equal($targets, SQL_PARAMS_NAMED, 'tid');
+        $targetparams['newuserid'] = $newuserid;
+        $targetparams['now'] = time();
         $DB->execute(
             "UPDATE {local_unifiedgrader_clib}
                 SET userid = :newuserid, timemodified = :now
-              WHERE id {$insql}",
-            $params,
+              WHERE id {$targetsql}",
+            $targetparams,
         );
 
-        return count($commentids);
+        return count($targets);
     }
 
     /**
@@ -739,22 +773,31 @@ class library_audit {
 
         $now = time();
         $imported = 0;
+        $existing = [];
 
         foreach ($legacy as $row) {
             $code = $row['wouldbecode'];
-            $matchsql = 'userid = :userid AND coursecode = :coursecode AND ' .
-                $DB->sql_compare_text('content', 255) . ' = ' . $DB->sql_compare_text(':content', 255);
-            $matchparams = [
-                'userid' => $row['userid'],
-                'coursecode' => $code,
-                'content' => $row['content'],
-            ];
+            $ownerid = (int) $row['userid'];
 
             // Already present — from this run or an earlier one, or because
             // the teacher separately re-saved the same comment. Either way
             // the v2 table already has it, so no insert is needed, but the
             // stale legacy row still gets cleared below.
-            $confirmed = $DB->record_exists_select('local_unifiedgrader_clib', $matchsql, $matchparams);
+            //
+            // Compared in PHP, not with a coursecode = :coursecode predicate.
+            // MariaDB's default collation folds case and ignores trailing
+            // spaces, so that predicate matched a 'bib3129' row for a legacy
+            // comment filed under 'BIB3129', skipped the insert, and then
+            // deleted the only copy with the original spelling below.
+            if (!isset($existing[$ownerid])) {
+                $existing[$ownerid] = [];
+                $ownerrows = $DB->get_records('local_unifiedgrader_clib', ['userid' => $ownerid], '', 'id, coursecode, content');
+                foreach ($ownerrows as $ownerrow) {
+                    $existing[$ownerid][$ownerrow->coursecode . "\0" . $ownerrow->content] = true;
+                }
+            }
+            $duplicatekey = $code . "\0" . $row['content'];
+            $confirmed = isset($existing[$ownerid][$duplicatekey]);
 
             if (!$confirmed) {
                 $newid = $DB->insert_record('local_unifiedgrader_clib', (object) [
@@ -772,6 +815,7 @@ class library_audit {
                 $confirmed = $DB->record_exists('local_unifiedgrader_clib', ['id' => $newid]);
                 if ($confirmed) {
                     $imported++;
+                    $existing[$ownerid][$duplicatekey] = true;
                 }
             }
 

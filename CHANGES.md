@@ -1,5 +1,51 @@
 # Changelog
 
+## v2.11.1+uai.3 (2026091502)
+
+Fixes to the comment library moderation and CSV tools that upstream added in v2.10.0 and v2.11.0,
+recorded as found but not fixed under v2.11.1+uai.1. Each was re-verified against the code before it
+was changed.
+
+- **A teacher could not export their own bucket.** `export_library_csv.php` compared the requested
+  owner, an int, with `$USER->id`, a string from the database, strictly, so every teacher was asked
+  for `local/unifiedgrader:moderatelibraries`. The comparison now goes through
+  `library_csv::is_bucket_owner()`, which compares ints.
+- **A suspended owner was never flagged.** The owner query had lost the comma before the name fields,
+  so `suspended` became an alias for `firstnamephonetic`.
+- **CSV import:**
+  - A UTF-8 byte order mark, which Excel's "CSV UTF-8" writes, is stripped. It hid the first column:
+    a cross-owner file lost its ownerid column and filed every row under the fallback owner.
+  - A cell that is not valid UTF-8 is read as Windows-1252, which Excel writes for plain "CSV"; a row
+    that still is not valid is reported and skipped. PostgreSQL used to abort the import part way.
+  - A course code over 255 characters or a tag name over 50 is a row error, checked before anything is
+    written. A long tag used to leave its comment behind untagged and abort the rest of the file.
+    Re-scoping comments to a code over 255 characters is refused, with a notice on the page.
+  - The duplicate check compares course code and content exactly, in PHP. On MariaDB a case or
+    trailing-space variant counted as a duplicate and was skipped.
+  - A filtered import on the moderation page goes into the filtered teacher's library even when the
+    file has an ownerid column, as the page's help text says.
+  - Every import page names the rows it rejected. The teacher's own import and the bucket import
+    showed only the imported and skipped counts, so a rejected row disappeared without a word.
+- **CSV export** puts a leading quote on cells that start with `=`, `+`, `-`, `@`, a tab or a carriage
+  return, so a spreadsheet does not evaluate teacher-written text or owner names as formulas. A cell
+  that already starts with a quote gets one too. Import removes a quote only where export could have
+  added one, so an export imports back unchanged, and a cell that merely starts with a quote, in an older
+  export or a hand-made file, keeps it.
+- **Exact course-code matching.** The moderation inventory, the bucket view, the bucket export and the
+  legacy import tell course codes apart exactly, in PHP. On MariaDB the inventory merged case and
+  trailing-space variants into one row, and the legacy import could match a differently cased v2 row,
+  skip the insert, and then delete the only copy of the legacy comment.
+- **Managers** can open the moderation page and the system-defaults page with the capability each page
+  checks, `local/unifiedgrader:moderatelibraries` and `local/unifiedgrader:managesystemdefaults`, both
+  granted to managers. The pages were registered for site administrators only, while the export already
+  honoured the moderation capability.
+- **Inspecting a bucket whose owner no longer exists** labels the owner from the lang string instead of
+  passing an incomplete user to `fullname()`, which aborted the page under developer debugging.
+- **Reassigning comments** reports, and logs, the number of comments that exist, not the number of ids
+  requested.
+- Tests for two paths that had none: the site-wide duplicate finder finding a real group, and blank
+  feedback on an assignment with Feedback comments disabled leaving a draft file where it is.
+
 ## v2.11.1+uai.2 (2026091501)
 
 Three fixes found while reviewing the upstream v2.11.1 merge. Two correct this fork's own earlier fixes;
