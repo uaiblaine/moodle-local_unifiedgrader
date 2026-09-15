@@ -195,7 +195,7 @@ if (empty($pending)) {
         foreach ($p['tagids'] as $tid) {
             $tagspills .= html_writer::span(
                 format_string($tagnames[$tid] ?? '?'),
-                'badge bg-secondary me-1',
+                'badge bg-secondary text-dark me-1',
             );
         }
 
@@ -319,7 +319,7 @@ foreach ($comments as $c) {
     foreach (($c['tagids'] ?? []) as $tid) {
         $tagspills .= html_writer::span(
             format_string($tagnames[$tid] ?? '?'),
-            'badge bg-secondary me-1',
+            'badge bg-secondary text-dark me-1',
         );
     }
 

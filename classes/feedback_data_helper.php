@@ -213,31 +213,47 @@ class feedback_data_helper {
         if ($gradingdefinition && !empty($gradingdefinition['criteria'])) {
             $gradingmethod = $gradingdefinition['method'] ?? 'simple';
 
-            if ($gradingmethod === 'rubric') {
+            if (grading_method_helper::is_rubric($gradingmethod)) {
                 $hasrubric = true;
+                $isranged = grading_method_helper::is_ranged_rubric($gradingmethod);
                 $fillmap = [];
                 if ($rubricdata && !empty($rubricdata['criteria'])) {
                     foreach ($rubricdata['criteria'] as $critid => $critdata) {
                         $fillmap[(int) $critid] = [
                             'levelid' => !empty($critdata['levelid']) ? (int) $critdata['levelid'] : 0,
                             'remark' => $critdata['remark'] ?? '',
+                            // Ranged criteria award a score inside the chosen
+                            // level's band rather than the level's own score.
+                            'grade' => isset($critdata['grade']) && $critdata['grade'] !== ''
+                                ? (float) $critdata['grade']
+                                : null,
                         ];
                     }
                 }
                 foreach ($gradingdefinition['criteria'] as $criterion) {
                     $levels = [];
                     $selectedscore = null;
-                    $fill = $fillmap[$criterion['id']] ?? ['levelid' => 0, 'remark' => ''];
+                    $fill = $fillmap[$criterion['id']] ?? ['levelid' => 0, 'remark' => '', 'grade' => null];
+                    $criterionranged = $isranged && !empty($criterion['isranged']);
                     foreach ($criterion['levels'] as $level) {
                         $isselected = $fill['levelid'] && $fill['levelid'] === $level['id'];
                         $levels[] = [
-                            'score' => $level['score'],
+                            // Ranged criteria are marked against a band, so show
+                            // the band rather than a single point value.
+                            'score' => $criterionranged && isset($level['rangelabel'])
+                                ? $level['rangelabel']
+                                : $level['score'],
                             'definition' => format_text($level['definition'] ?? '', FORMAT_HTML, $formatopts),
                             'selected' => $isselected,
                         ];
                         if ($isselected) {
                             $selectedscore = $level['score'];
                         }
+                    }
+                    // For a ranged criterion the awarded score is what the marker
+                    // entered, not the score attached to the level.
+                    if ($criterionranged && $fill['grade'] !== null) {
+                        $selectedscore = $fill['grade'];
                     }
                     $rubriccriteria[] = [
                         'description' => format_text($criterion['description'] ?? '', FORMAT_HTML, $formatopts),

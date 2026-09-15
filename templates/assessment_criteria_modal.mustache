@@ -28,6 +28,8 @@
       For rubric:
         * description - string: criterion description
         * levels - array of {definition, scoreDisplay}
+    * hasPdf - bool: whether a printable PDF of the criteria is available
+    * pdfUrl - string: URL of that PDF (gradingform_rubric_ranges only)
       For guide:
         * shortname - string: criterion short name
         * description - string: criterion description
@@ -42,6 +44,8 @@
         "description": "Assessment criteria for this activity.",
         "isRubric": true,
         "isGuide": false,
+        "hasPdf": true,
+        "pdfUrl": "https://example.com/print.php?areaid=1",
         "criteria": [
             {
                 "description": "Content quality",
@@ -57,6 +61,15 @@
         ]
     }
 }}
+{{#hasPdf}}
+<div class="mb-3">
+    <a href="{{pdfUrl}}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
+        <i class="fa fa-file-pdf-o me-1" aria-hidden="true"></i>
+        {{#str}} download_criteria_pdf, local_unifiedgrader {{/str}}
+    </a>
+</div>
+{{/hasPdf}}
+
 {{#description}}
 <p class="text-muted mb-3">{{{description}}}</p>
 {{/description}}

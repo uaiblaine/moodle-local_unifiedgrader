@@ -77,11 +77,16 @@ final class badge_contrast_test extends \basic_testcase {
     /**
      * Every file whose contents can put a class name in front of a user.
      *
+     * The top-level pages count too. The comment library moderation pages that arrived
+     * with upstream v2.10.0 print their badges straight through html_writer from the
+     * plugin root, outside every directory this scan used to read, and five of them
+     * shipped without a text colour.
+     *
      * @return array List of absolute file paths.
      */
     private function markup_files(): array {
         $root = dirname(__DIR__);
-        $files = [];
+        $files = glob($root . '/*.php');
         foreach (['templates', 'amd/src', 'classes'] as $dir) {
             $path = $root . '/' . $dir;
             if (!is_dir($path)) {

@@ -30,6 +30,7 @@ import Templates from 'core/templates';
 import Ajax from 'core/ajax';
 import Notification from 'core/notification';
 import {get_string as getString} from 'core/str';
+import Config from 'core/config';
 import * as OfflineCache from 'local_unifiedgrader/offline_cache';
 
 /**
@@ -171,7 +172,9 @@ const open = async(coursecode, onClose) => {
     _offline = false;
 
     const title = await getString('clib_title', 'local_unifiedgrader');
-    const {html} = await Templates.renderForPromise('local_unifiedgrader/comment_library_modal', {});
+    const {html} = await Templates.renderForPromise('local_unifiedgrader/comment_library_modal', {
+        wwwroot: Config.wwwroot,
+    });
 
     _modal = await Modal.create({
         title,
@@ -981,7 +984,7 @@ const _handleSaveNew = async() => {
     // universal save regardless of the checkbox.
     const coursecode = (universal || _activeCourse === '__universal__')
         ? ''
-        : (_activeCourse || _coursecode);
+        : (_realCourseCode(_activeCourse) || _coursecode);
     try {
         await ajax('local_unifiedgrader_save_library_comment', {
             coursecode,
@@ -995,6 +998,24 @@ const _handleSaveNew = async() => {
     } catch (err) {
         _handleError(err);
     }
+};
+
+/**
+ * The sidebar's course value, or '' when it holds a bucket sentinel.
+ *
+ * Sentinels ('__system__', '__universal__') are display buckets, not course
+ * codes. '__universal__' is handled explicitly by the callers; '__system__'
+ * used to fall through and get stored verbatim as a comment's coursecode,
+ * producing a phantom course bucket only that teacher could see.
+ *
+ * @param {string} value The active sidebar bucket.
+ * @returns {string} A real course code, or '' if the value is a sentinel.
+ */
+const _realCourseCode = (value) => {
+    if (!value || (value.startsWith('__') && value.endsWith('__'))) {
+        return '';
+    }
+    return value;
 };
 
 // ───────────────────────── Delete / Share ─────────────────────────

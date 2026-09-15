@@ -19,8 +19,8 @@ Feature: Arrow-key student navigation respects editing context
       | student1 | TC101  | student        |
       | student2 | TC101  | student        |
     And the following "activities" exist:
-      | activity | name    | course | idnumber | grade |
-      | assign   | Essay 1 | TC101  | a1       | 20    |
+      | activity | name    | course | idnumber | grade | assignfeedback_comments_enabled |
+      | assign   | Essay 1 | TC101  | a1       | 20    | 1                               |
     And I log in as "teacher1"
 
   Scenario: Arrow keys while editing overall feedback do not switch students

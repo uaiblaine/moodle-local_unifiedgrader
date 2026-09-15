@@ -897,4 +897,155 @@ final class assign_adapter_test extends \advanced_testcase {
             'The cleared grade must still be clear when the page is reloaded.',
         );
     }
+
+    /**
+     * With "Feedback comments" disabled, mod_assign silently discards feedback
+     * text. A save carrying real feedback must be refused before anything is
+     * written, rather than reporting success and losing the text.
+     */
+    public function test_save_grade_refuses_feedback_when_comments_disabled(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario(['modparams' => ['assignfeedback_comments_enabled' => 0]]);
+        $studentid = (int) $s->scenario->students[0]->id;
+        $this->setUser($s->scenario->students[0]);
+        $plugingen->create_assign_submission($s->scenario->activity, $studentid);
+        $this->setUser($s->scenario->teacher);
+
+        $this->assertFalse($s->adapter->has_feedback_plugin('comments'), 'Precondition: comments disabled.');
+
+        // Text, and media with no text, both count as feedback worth protecting.
+        foreach (['<p>Well argued.</p>', '<p><img src="https://example.com/a.png" alt=""></p>'] as $feedback) {
+            try {
+                $s->adapter->save_grade($studentid, 70.0, $feedback);
+                $this->fail('A save carrying feedback must be refused when comments are disabled.');
+            } catch (\moodle_exception $e) {
+                $this->assertEquals('error_feedback_comments_disabled', $e->errorcode);
+            }
+        }
+
+        // Refused before any write: the grade was not stored either.
+        $grade = $DB->get_record('assign_grades', [
+            'assignment' => $s->scenario->activity->id,
+            'userid' => $studentid,
+        ]);
+        $this->assertTrue(!$grade || $grade->grade === null || (float) $grade->grade < 0);
+    }
+
+    /**
+     * Blank feedback is what the hidden editor sends when comments are disabled,
+     * so it must still save the grade, and must not create a comment row.
+     */
+    public function test_save_grade_with_blank_feedback_when_comments_disabled(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario(['modparams' => ['assignfeedback_comments_enabled' => 0]]);
+        $studentid = (int) $s->scenario->students[0]->id;
+        $this->setUser($s->scenario->students[0]);
+        $plugingen->create_assign_submission($s->scenario->activity, $studentid);
+        $this->setUser($s->scenario->teacher);
+
+        foreach (['', '<p></p>', '<p>&nbsp;</p>'] as $blank) {
+            $this->assertTrue($s->adapter->save_grade($studentid, 70.0, $blank, FORMAT_HTML, [], 12345));
+        }
+
+        $this->assertEqualsWithDelta(70.0, $s->adapter->get_grade_data($studentid)['grade'], 0.01);
+        $this->assertSame(0, $DB->count_records('assignfeedback_comments', [
+            'assignment' => $s->scenario->activity->id,
+        ]));
+    }
+
+    /**
+     * Seed a student with two submitted attempts (0 and 1, 1 being latest).
+     *
+     * Mirrors the Behat "has N graded submission attempts" step: the core
+     * generator has no attempt-number control, so the second attempt row is
+     * inserted directly, as a manual reopen would produce it.
+     *
+     * @param \stdClass $scenario The grading scenario.
+     * @param int $userid The student user ID.
+     */
+    private function seed_two_attempts(\stdClass $scenario, int $userid): void {
+        global $DB;
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $first = $plugingen->create_assign_submission($scenario->activity, $userid);
+        $first = $DB->get_record('assign_submission', ['id' => $first->id], '*', MUST_EXIST);
+
+        $second = clone $first;
+        unset($second->id);
+        $second->attemptnumber = 1;
+        $second->latest = 1;
+        $second->timecreated = time();
+        $DB->insert_record('assign_submission', $second);
+
+        $first->latest = 0;
+        $DB->update_record('assign_submission', $first);
+    }
+
+    /**
+     * Re-saving a previous attempt must not overwrite the latest attempt's
+     * feedback.
+     *
+     * After mod_assign saved the previous attempt, save_grade() moved the
+     * editor's draft files and rewrote the comment of the LATEST attempt's
+     * grade, not the attempt just graded. The latest attempt's feedback was
+     * replaced by the older attempt's text. The draft item id is what reaches
+     * that branch; the grader always sends one when TinyMCE is in use.
+     */
+    public function test_save_grade_on_previous_attempt_keeps_latest_feedback(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $studentid = (int) $s->scenario->students[0]->id;
+        $this->seed_two_attempts($s->scenario, $studentid);
+        $this->setUser($s->scenario->teacher);
+
+        $s->adapter->save_grade($studentid, 50.0, '<p>Attempt one feedback</p>', FORMAT_HTML, [], 0, 0, 0);
+        $s->adapter->save_grade($studentid, 80.0, '<p>Attempt two feedback</p>', FORMAT_HTML, [], 0, 0, 1);
+
+        // Revise the first attempt's feedback through the editor's draft area.
+        $draftitemid = file_get_unused_draft_itemid();
+        $s->adapter->save_grade($studentid, 55.0, '<p>Attempt one revised</p>', FORMAT_HTML, [], $draftitemid, 0, 0);
+
+        $reloaded = adapter_factory::create($s->scenario->cm->id);
+        $latest = $reloaded->get_grade_data_for_attempt($studentid, 1);
+        $previous = $reloaded->get_grade_data_for_attempt($studentid, 0);
+
+        $this->assertStringContainsString('Attempt two feedback', $latest['feedback']);
+        $this->assertStringNotContainsString('Attempt one', $latest['feedback']);
+        $this->assertStringContainsString('Attempt one revised', $previous['feedback']);
+        $this->assertEqualsWithDelta(80.0, $latest['grade'], 0.01);
+    }
+
+    /**
+     * The feedback editor must be loaded with the feedback of the attempt on
+     * screen. prepare_feedback_draft() ignored the attempt number and always
+     * loaded the latest attempt's feedback, which a save then wrote over the
+     * previous attempt's own feedback.
+     */
+    public function test_prepare_feedback_draft_loads_requested_attempt(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $studentid = (int) $s->scenario->students[0]->id;
+        $this->seed_two_attempts($s->scenario, $studentid);
+        $this->setUser($s->scenario->teacher);
+
+        $s->adapter->save_grade($studentid, 50.0, '<p>Attempt one feedback</p>', FORMAT_HTML, [], 0, 0, 0);
+        $s->adapter->save_grade($studentid, 80.0, '<p>Attempt two feedback</p>', FORMAT_HTML, [], 0, 0, 1);
+
+        $draftitemid = file_get_unused_draft_itemid();
+
+        $previous = $s->adapter->prepare_feedback_draft($studentid, $draftitemid, 0);
+        $this->assertStringContainsString('Attempt one feedback', $previous['feedbackhtml']);
+        $this->assertStringNotContainsString('Attempt two', $previous['feedbackhtml']);
+
+        $latest = $s->adapter->prepare_feedback_draft($studentid, $draftitemid, -1);
+        $this->assertStringContainsString('Attempt two feedback', $latest['feedbackhtml']);
+    }
 }

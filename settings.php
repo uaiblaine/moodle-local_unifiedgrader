@@ -141,4 +141,15 @@ if ($hassiteconfig) {
         new moodle_url('/local/unifiedgrader/manage_system_defaults.php'),
         'local/unifiedgrader:managesystemdefaults',
     ));
+
+    // External page: audit and repair teachers' comment libraries. Comment
+    // library entries are scoped by a free-text course code rather than a
+    // foreign key, so this is the only place an admin can see entries that
+    // have drifted out of reach of their owner.
+    $ADMIN->add('local_unifiedgrader_cat', new admin_externalpage(
+        'local_unifiedgrader_moderatelibraries',
+        get_string('clibmod_pagename', 'local_unifiedgrader'),
+        new moodle_url('/local/unifiedgrader/moderate_libraries.php'),
+        'local/unifiedgrader:moderatelibraries',
+    ));
 }

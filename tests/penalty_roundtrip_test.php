@@ -47,7 +47,13 @@ final class penalty_roundtrip_test extends \advanced_testcase {
     private function scenario(float $maxgrade = self::MAXGRADE): object {
         $gen = $this->getDataGenerator();
         $course = $gen->create_course();
-        $assign = $gen->create_module('assign', ['course' => $course->id, 'grade' => $maxgrade]);
+        // Feedback comments on explicitly: core's generator leaves them off, and
+        // save_grade() refuses feedback text for an assignment that can't store it.
+        $assign = $gen->create_module('assign', [
+            'course' => $course->id,
+            'grade' => $maxgrade,
+            'assignfeedback_comments_enabled' => 1,
+        ]);
         $cm = get_coursemodule_from_instance('assign', $assign->id);
         $teacher = $gen->create_user();
         $student = $gen->create_user();

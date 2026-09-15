@@ -278,7 +278,10 @@ class feedback_summary_pdf extends \pdf {
      * @param array $data
      */
     private function render_grading_section(array $data): void {
-        if ($data['gradingmethod'] === 'rubric' && !empty($data['rubriccriteria'])) {
+        if (
+            \local_unifiedgrader\grading_method_helper::is_rubric($data['gradingmethod'])
+                && !empty($data['rubriccriteria'])
+        ) {
             $this->render_rubric($data);
         } else if ($data['gradingmethod'] === 'guide' && !empty($data['guidecriteria'])) {
             $this->render_marking_guide($data);

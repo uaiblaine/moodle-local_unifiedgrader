@@ -1734,3 +1734,41 @@ span.local-unifiedgrader-mark-highlight {
         margin-left: 0;
     }
 }
+
+/* Ranged rubric criteria: slider + number box, kept in sync with the level buttons. */
+.ug-ranged {
+    max-width: 32rem;
+}
+
+.ug-ranged-slider {
+    flex: 1 1 auto;
+    min-width: 8rem;
+}
+
+/* Bootstrap paints .form-range's track, so the band gradient has to be applied
+   to the track pseudo-elements rather than the input's own background. */
+.ug-ranged-slider::-webkit-slider-runnable-track {
+    background: var(--ug-band-gradient, var(--bs-secondary-bg, #e9ecef));
+    border-radius: 1rem;
+    height: 0.6rem;
+}
+
+.ug-ranged-slider::-moz-range-track {
+    background: var(--ug-band-gradient, var(--bs-secondary-bg, #e9ecef));
+    border-radius: 1rem;
+    height: 0.6rem;
+}
+
+.ug-ranged-number-wrap {
+    flex: 0 0 auto;
+}
+
+.ug-ranged-number {
+    width: 4.5rem;
+}
+
+.ug-ranged-band {
+    display: block;
+    min-height: 1.2em;
+    margin-top: 0.15rem;
+}

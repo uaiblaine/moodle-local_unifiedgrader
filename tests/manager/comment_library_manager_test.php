@@ -106,11 +106,20 @@ final class comment_library_manager_test extends \advanced_testcase {
         $user1 = $this->getDataGenerator()->create_user();
         $user2 = $this->getDataGenerator()->create_user();
 
-        $id = comment_library_manager::save_comment($user1->id, '', 'Keep me');
+        $tagid = comment_library_manager::save_tag($user1->id, 'Structure');
+        $id = comment_library_manager::save_comment($user1->id, '', 'Keep me', [$tagid]);
         comment_library_manager::delete_comment($id, $user2->id);
 
         // Comment should still exist.
         $this->assertTrue($DB->record_exists('local_unifiedgrader_clib', ['id' => $id]));
+
+        // And so should its tags. The mapping delete used to run unscoped, so a
+        // delete by the wrong owner left the comment in place but stripped
+        // every tag off it — surviving this assertion is the whole point.
+        $this->assertTrue($DB->record_exists('local_unifiedgrader_clmap', [
+            'commentid' => $id,
+            'tagid' => $tagid,
+        ]));
     }
 
     /**
