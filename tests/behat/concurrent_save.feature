@@ -25,9 +25,8 @@ Feature: A save requested while another one is in flight is not dropped
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
     # Type a mark and leave the field (which saves), then correct it and leave
-    # again while that first save is still running. The correction used to be
-    # dropped silently — the panel refused any save while one was in flight —
-    # so the student kept the first, wrong mark.
+    # again while that first save is still running. Fails if a save requested
+    # during another one is dropped: the student would keep the first mark.
     When I enter "12" as the overall grade and correct it to "17" before the save lands
     Then the saved grade for "student1" on "Essay 1" is "17"
     # And the teacher sees the correction on their next visit, not the typo.
@@ -42,8 +41,8 @@ Feature: A save requested while another one is in flight is not dropped
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
     # A criterion change saves through the debounced autosave, the path every
-    # rubric level and every ranged rubric slider takes. That path used to give
-    # up while a save was in flight, and the finishing save marked the change
-    # clean, so the student kept the first score.
+    # rubric level and every ranged rubric slider takes. Fails if that path drops
+    # a request made while a save is in flight and the finishing save marks the
+    # change clean: the student would keep the first score.
     When I score "Argumentation" "8", save, and change it to "15" before the save lands
     Then the saved grade for "student1" on "Essay 1" is "15"

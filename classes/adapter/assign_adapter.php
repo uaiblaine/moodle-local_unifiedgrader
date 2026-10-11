@@ -678,32 +678,23 @@ class assign_adapter extends base_adapter {
         // Hard-block (locked) still surfaces a clear error so the teacher knows
         // to deal with it explicitly.
         //
-        // A pure clear takes the other branch below: it must not lift the
-        // override, but it must not pretend to have worked either.
+        // A pure clear is refused by the first branch below instead: it must
+        // not lift the override, and it must not report success either.
         if (($grade === null && empty($advancedgradingdata)) && $this->assign->grading_disabled($userid)) {
             /*
-             * Clearing the grade cannot land while the gradebook entry is
-             * locked or overridden: core's apply_grade_to_user() wraps the
-             * whole write in if (!$gradingdisabled), so the previous mark
-             * survives and the save still reports success — the teacher
-             * believes the student is ungraded when they are not.
+             * While grading_disabled() is true, core's apply_grade_to_user()
+             * skips the write, so the previous mark would survive a save that
+             * reports success. save_grade_directly() writes assign_grades
+             * itself, but grade_item::update_raw_grade() keeps the final grade
+             * of an overridden cell and refuses a locked one, so the grader
+             * would show the student ungraded while the gradebook, and the
+             * student, keep the mark.
              *
-             * The direct-save route below would get PART of the way: it writes
-             * assign_grades itself, so it does not hit that gate. But the
-             * gradebook does not follow, because grade_item::update_raw_grade()
-             * refuses to touch an overridden cell. Measured: assign_grades.grade
-             * becomes -1 while the gradebook keeps 50 — the grader says ungraded
-             * and the student still sees the mark. A refusal is better than two
-             * stores disagreeing about the same student.
-             *
-             * Refusing out loud is also the honest outcome for the override
-             * itself. Lifting it here would silently drop a penalty (or a
-             * deliberate gradebook edit) the teacher never asked to drop; the
-             * "--" deliberate reset is the path that does lift it, on purpose,
-             * via reset_grade_and_submission().
+             * Lifting the override here would silently drop a penalty or a
+             * deliberate gradebook edit; the "--" reset
+             * (reset_grade_and_submission()) is the path that lifts it.
              */
-            // The two blocks need different advice: "--" lifts an override, so
-            // it is offered for one, but nothing here can lift a lock.
+            // A lock gets its own message: "--" lifts an override but not a lock.
             throw new \moodle_exception(
                 $this->is_gradebook_grade_locked($userid)
                     ? 'error_grade_clear_blocked_by_lock'
@@ -743,23 +734,18 @@ class assign_adapter extends base_adapter {
          * 2. Grade type is "None" — assign::save_grade() does not persist a
          *    numeric grade when there is no grade column, so the "Mark as
          *    graded" toggle state would silently revert on reload.
-         * 3. A null grade with no criteria data, which is the teacher's
-         *    "ungrade me" signal (typing "-"). assign::apply_grade_to_user()
-         *    guards the write with isset($formdata->grade), and isset() is
-         *    false for null, so the clear was silently dropped and the previous
-         *    mark stayed put. The direct path stores mod_assign's own -1
-         *    sentinel instead. forum_adapter has always taken the direct path
-         *    for null; assign never did.
+         * 3. A null grade, which is the teacher's "ungrade me" signal (typing
+         *    "-"). assign::apply_grade_to_user() guards the write with
+         *    isset($formdata->grade), and isset() is false for null, so the
+         *    clear was silently dropped and the previous mark stayed put. The
+         *    direct path stores mod_assign's own -1 sentinel instead.
+         *    forum_adapter has always taken the direct path for null; assign
+         *    never did.
          *
-         *    The "no criteria data" half of that is not optional, and it is why
-         *    this reads `$grade === null && empty($advancedgradingdata)` rather
-         *    than testing the grade alone. save_grade_directly() takes no
-         *    $advancedgradingdata argument and never touches the grading
-         *    controller, so routing a null grade there unconditionally would
-         *    silently discard a marking guide the teacher had just filled in —
-         *    reachable whenever the numeric box is empty while criteria carry
-         *    scores. Case 1 below already owns "controller, but nothing to
-         *    process".
+         *    Only without criteria data: save_grade_directly() never touches
+         *    the grading controller, so a null grade sent with filled criteria
+         *    (numeric box empty, guide scored) takes the normal path, where the
+         *    grading instance computes the grade.
          */
         $gradingdisabled = ((int) $instance->grade === 0);
         if (
@@ -780,8 +766,8 @@ class assign_adapter extends base_adapter {
         }
 
         $data = new \stdClass();
-        // Null never reaches here: the branch above routes an "ungrade me" to
-        // save_grade_directly(), which stores mod_assign's -1 sentinel.
+        // Null reaches here only with criteria data, which sets the grade; an
+        // "ungrade me" without it went to save_grade_directly() above.
         $data->grade = $grade;
         $data->attemptnumber = $attemptnumber;
         $editordata = [

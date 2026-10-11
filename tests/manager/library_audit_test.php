@@ -157,9 +157,9 @@ final class library_audit_test extends \advanced_testcase {
     /**
      * The inventory lists each exact spelling of a code as its own bucket.
      *
-     * On MariaDB the GROUP BY merged 'BIB3129', 'bib3129' and 'BIB3129 ' into one row whose count
-     * covered all three, while the bucket view it links to now matches exactly and showed one
-     * comment; the other spellings could not be opened from the page at all.
+     * MariaDB's collation compares 'BIB3129', 'bib3129' and 'BIB3129 ' as equal, so a GROUP BY would
+     * merge them into one row; see library_audit::get_inventory(). Each row's count must match what
+     * the exact-matching bucket view returns for that spelling.
      */
     public function test_inventory_keeps_variants_the_collation_would_merge(): void {
         $this->resetAfterTest();
@@ -742,8 +742,9 @@ final class library_audit_test extends \advanced_testcase {
     /**
      * A suspended owner is reported as suspended.
      *
-     * The owner query had lost the comma before the name fields, so "suspended" became an alias
-     * for firstnamephonetic and the flag could never be set.
+     * Changes that must make it fail: dropping the comma after "suspended" in load_owners()'s
+     * query, which turns it into an alias for the first selected name field (firstnamephonetic),
+     * so the flag is never set.
      */
     public function test_suspended_owner_is_reported(): void {
         $this->resetAfterTest();
@@ -763,7 +764,7 @@ final class library_audit_test extends \advanced_testcase {
     }
 
     /**
-     * An owner with no user row is labelled from the lang string, which the bucket view now uses too.
+     * An owner with no user row is labelled from the clibmod_missing_owner string, as in the bucket view.
      */
     public function test_describe_owner_labels_a_missing_owner(): void {
         $this->resetAfterTest();
@@ -777,7 +778,7 @@ final class library_audit_test extends \advanced_testcase {
     /**
      * Re-scoping to a code longer than the column is refused before anything is written.
      *
-     * The UPDATE used to throw a database error instead, aborting the page.
+     * Without the check the UPDATE throws a database error, which aborts the page.
      */
     public function test_recode_refuses_a_code_longer_than_the_column(): void {
         global $DB;
@@ -821,7 +822,7 @@ final class library_audit_test extends \advanced_testcase {
     /**
      * A bucket view returns that bucket only, not a trailing-space variant of its code.
      *
-     * On MariaDB the query's collation ignored the trailing space and returned both.
+     * MariaDB's collation ignores trailing spaces, so an SQL equality on the code returns both.
      */
     public function test_get_comments_for_matches_the_course_code_exactly(): void {
         $this->resetAfterTest();
@@ -839,8 +840,8 @@ final class library_audit_test extends \advanced_testcase {
     /**
      * The legacy import keeps a comment whose code differs only by case from an existing one.
      *
-     * On MariaDB the old match treated the existing 'bib3129' row as the legacy comment's copy,
-     * skipped the insert, and then deleted the legacy row: the comment was gone from both tables.
+     * Under MariaDB's case-insensitive collation an SQL match would take the existing 'bib3129' row
+     * for the legacy comment's copy, skip the insert and delete the legacy row, losing the comment.
      */
     public function test_legacy_import_keeps_a_case_variant(): void {
         global $DB;

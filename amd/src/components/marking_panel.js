@@ -153,11 +153,12 @@ export default class extends BaseComponent {
         this._suppressAutoSave = false;
         this._saveInFlight = false;
         // A save requested while another one was in flight, held until the round
-        // trip finishes and re-run then (see _handleSaveGrade / _updateUI). Null
-        // when nothing is waiting; otherwise {explicit: boolean, userid: number}.
+        // trip finishes and re-run then (see _handleSaveGrade / _endGradeSave).
+        // Null when nothing is waiting; otherwise
+        // {explicit: boolean, auto: boolean, userid: number}.
         this._pendingSaveRequest = null;
         // What the last dispatched save sent (see _formSnapshot), so a held
-        // autosave can tell a real change from a post-save re-render.
+        // autosave or a refused save can tell a real change from a re-render.
         this._dispatchedForm = null;
         // Set when _updateUI sees a grade save start (ui.gradesaving), cleared
         // when it handles that save's end. Only that end may mark the form clean.
@@ -1053,17 +1054,11 @@ export default class extends BaseComponent {
                 // When advanced grading is active and manual override is not allowed,
                 // make the grade input readonly so teachers must use the rubric/guide.
                 //
-                // A quiz is ALWAYS readonly, whatever the override setting says.
-                // Its total is derived: mod_quiz's grade_calculator rewrites
-                // quiz_grades from the attempt sumgrades and the grading method on
-                // every recompute — a per-question save, a regrade, a max-grade
-                // change, even the update_overdue_attempts cron with nobody at the
-                // keyboard. The table has no override column, so quiz_adapter has
-                // nowhere to put a typed total and deliberately discards it (see
-                // quiz_adapter_test::test_save_grade_does_not_persist_a_typed_quiz_total).
-                // The box has always been a computed readout; it just used to accept
-                // typing and throw it away. Teachers move a quiz total by changing
-                // the question marks, or with a gradebook override.
+                // A quiz is always readonly, whatever the override setting says: mod_quiz
+                // derives its total from the question marks, and quiz_adapter::save_grade
+                // discards a typed one (see quiz_adapter_test::
+                // test_save_grade_does_not_persist_a_typed_quiz_total). A quiz total
+                // moves through the question marks or a gradebook override.
                 const isQuiz = state.activity?.type === 'quiz';
                 const hasAdvancedGrading = this._gradingDefinition !== null;
                 const allowOverride = state.ui?.allowmanualgradeoverride !== false;
@@ -1120,19 +1115,15 @@ export default class extends BaseComponent {
         } else if (this._collapseFeedbackAfterSave) {
             // A save the teacher explicitly asked for while re-editing existing
             // feedback has landed (state now holds the freshly-saved feedback) —
-            // collapse the editor back to the read-only "saved" card so a re-edit
-            // gets the same confirmation a first-time save does. Without this the
-            // editor stayed open and the save looked like it had failed.
+            // collapse the editor back to the read-only "saved" card, the same
+            // confirmation a first-time save gets; an editor left open reads as a
+            // failed save.
             //
             // Background saves (the debounced rubric save, the pre-navigation
-            // save) must NOT collapse the editor under the teacher, and they
-            // never arm the flag — _handleSaveGrade only arms it for an explicit
-            // save. Deciding that here by reading editor focus instead is what
-            // broke this: whether pressing "Save feedback" moves focus off the
-            // TinyMCE iframe is browser-specific (Safari and Firefox on macOS
-            // leave focus where it was when a button is clicked, and so does any
-            // programmatic .click()), so the teacher's save confirmation came and
-            // went depending on the browser.
+            // save) never arm the flag, so they cannot collapse the editor under
+            // the teacher. Editor focus cannot make this decision: a button click
+            // leaves focus in the TinyMCE iframe in Safari and Firefox on macOS,
+            // and so does a programmatic .click().
             this._editingFeedback = false;
         }
         // One-shot — consumed by the first render after the save dispatch.
@@ -1335,11 +1326,11 @@ export default class extends BaseComponent {
      */
     async _updateUI({state}) {
         // The end of a grade save is detected on ui.gradesaving, which only
-        // saveGrade writes. ui.saving is shared with saves that store nothing of
-        // this form (a post rating, feedback files), and an overlapping one could
-        // otherwise end the cycle early. Handled before the awaits below, because
-        // the event that ends a save can arrive while an earlier call is still
-        // loading a string.
+        // saveGrade writes. ui.saving is also written by savePostRating, which
+        // stores nothing of this form, and an overlapping rating could otherwise
+        // end the cycle early. Handled before the awaits below, because the event
+        // that ends a save can arrive while an earlier call is still loading a
+        // string.
         if (state.ui.gradesaving) {
             this._saveCycleOpen = true;
         } else if (this._saveCycleOpen) {
@@ -1363,9 +1354,8 @@ export default class extends BaseComponent {
     /**
      * Settle the form at the end of a grade save, or handle its refusal.
      *
-     * Runs once per save. Interface changes that are not the end of one (posting
-     * or hiding grades, loading a student, a post rating) used to mark the form
-     * clean as well.
+     * Called by _updateUI once per grade save. No other ui change (posting or
+     * hiding grades, loading a student, a post rating) may mark the form clean.
      *
      * @param {object} state Current state.
      */
@@ -1398,8 +1388,9 @@ export default class extends BaseComponent {
 
         // Run a save that arrived while this one was in flight. It reads
         // the live form now, so it carries whatever the teacher changed
-        // during the round trip. Cleared before dispatching, so the
-        // re-run can queue a request of its own without looping.
+        // during the round trip; a held autosave runs only if the form
+        // differs from what this save sent. Cleared before dispatching, so
+        // the re-run can queue a request of its own without looping.
         const pending = this._pendingSaveRequest;
         this._pendingSaveRequest = null;
         const changed = !pending?.auto || this._formSnapshot() !== this._dispatchedForm;
@@ -1418,8 +1409,9 @@ export default class extends BaseComponent {
      * The rest depends on whether the form still holds exactly what the refused
      * save sent. If it does, a held request would send the same refused payload
      * and raise the same dialogue again, so it is dropped; and a refused clear
-     * ("-" or "--"), which blanked the grade box before sending, has the box put
-     * back to the grade this panel last loaded, which the refusal leaves stored.
+     * ("-", "--" or other non-numeric text; see _handleSaveGrade), which blanked
+     * the grade box before sending, has the box put back to the grade this panel
+     * last loaded, which the refusal leaves stored.
      * A grade typed or a level picked during the round trip is a new edit: it is
      * neither overwritten nor dropped, and a request held for it runs.
      *
@@ -1575,16 +1567,11 @@ export default class extends BaseComponent {
         if (this.reactive.state.activity?.usescale) {
             return true;
         }
-        // Neither is there anything to validate on a quiz. The box is a
-        // read-only readout of a total this panel computes itself
-        // (_computeRubricGrade's quizmanual branch scales the whole-quiz marks
-        // onto the quiz maximum, and falls back to an unclamped manual-mark
-        // delta on a scale-graded quiz), so refusing the save
-        // when it exceeds the activity max would block a legitimate
-        // per-question save over a number the teacher cannot even edit. The
-        // server takes the same position — save_grade skips the max check for
-        // quizzes because "quiz grades are similarly clamped by the question
-        // engine". Clear any stale invalid styling on the way out.
+        // Nor on a quiz: the box is a read-only readout of _computeRubricGrade,
+        // whose fallback for a scale-graded quiz is not capped at the maximum,
+        // so a max check here would block a per-question save over a number
+        // the teacher cannot edit. external\save_grade skips the max check for
+        // quizzes too. Clear any stale invalid styling on the way out.
         if (this.reactive.state.activity?.type === 'quiz') {
             gradeInput.classList.remove('is-invalid');
             if (errorEl) {
@@ -2778,9 +2765,8 @@ export default class extends BaseComponent {
      *
      * A rubric, ranged or not, keeps its marks in _rubricSelections; a marking
      * guide, and a quiz's manual questions, keep theirs in _guideScores. Each total
-     * reads only its own. Running the guide total on a rubric page summed nothing,
-     * so typing in the grade box set the rubric badge to "0 / 0", and "Reset to
-     * rubric" wrote 0 into the box and saved it.
+     * reads only its own: the guide total on a rubric page sums nothing, so it
+     * would set the rubric badge to "0 / 0" and write 0 into the grade box.
      */
     _updateGradingTotal() {
         const method = this._gradingDefinition?.method;
@@ -3602,13 +3588,12 @@ export default class extends BaseComponent {
     /**
      * Debounced auto-save — waits briefly so rapid field switches don't fire multiple saves.
      *
-     * While a save is in flight the request is held rather than dropped, the same
-     * way _handleSaveGrade holds one. Every rubric level click and every ranged
-     * rubric slider or score box saves only through here, and a slider is moved
-     * again within seconds, so a dropped request was an edit that the finishing
-     * save then marked clean without ever sending. A held autosave re-runs only
-     * if the form really differs from what the in-flight save sent, which is what
-     * keeps a post-save re-render (and the focus-out it causes) from looping.
+     * While a save is in flight the request is held rather than dropped, as in
+     * _handleSaveGrade. Rubric level clicks and ranged-rubric slider or score
+     * edits save only through here, and a dropped request would be marked clean
+     * by the finishing save without ever being sent. A held autosave re-runs only
+     * if the form differs from what the in-flight save sent, which keeps a
+     * post-save re-render (and the focus-out it causes) from looping.
      */
     _debouncedAutoSave() {
         if (this._suppressAutoSave) {
@@ -3682,9 +3667,9 @@ export default class extends BaseComponent {
      * re-run when the round trip finishes, rather than dropped.
      *
      * @param {boolean} explicit True when the teacher asked for this save (the
-     *        "Save feedback" button, "Delete feedback"), false for the saves the
-     *        panel fires on its own (debounced rubric autosave, focus-out of the
-     *        grade input, the save issued before navigating to another student).
+     *        "Save feedback" button, "Delete feedback"), false for every other
+     *        save (debounced autosave, focus-out of the grade input, the "Mark as
+     *        graded" toggle, the save issued before navigating to another student).
      *        Only an explicit save collapses a re-opened feedback editor back to
      *        the saved card.
      */
@@ -3713,18 +3698,19 @@ export default class extends BaseComponent {
         // Prevent overlapping saves — a second dispatch while one is in flight
         // races the first, and the older response can overwrite fresher data.
         //
-        // Hold the request rather than dropping it. The in-flight save read the
-        // form at ITS dispatch, so anything changed since is not in it; dropping
-        // the request loses that edit silently, behind a save that reported
-        // success. _updateUI re-runs it when the round trip finishes. One slot is
-        // enough: the held request reads the live form when it finally
-        // dispatches, so a third request only has to keep a re-run scheduled.
+        // Hold the request rather than dropping it: the in-flight save read the
+        // form at its own dispatch, so an edit made since is not in it, and the
+        // finishing save would mark that edit clean. _endGradeSave re-runs the
+        // held request when the round trip finishes. One slot is enough: the
+        // re-run reads the live form, so a third request only has to keep it
+        // scheduled.
         if (this._saveInFlight) {
             this._pendingSaveRequest = {
                 // Sticky, so an explicit request keeps its post-save collapse
                 // even when a background one is queued on top of it.
                 explicit: explicit || !!this._pendingSaveRequest?.explicit,
-                // Held here, it re-runs whatever the in-flight save sent.
+                // After a successful save, re-run even if the form still matches
+                // what that save sent (see _endGradeSave).
                 auto: false,
                 // The student it was requested for. If the teacher has moved on
                 // by the time the round trip ends, the re-run would be reading

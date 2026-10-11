@@ -179,21 +179,15 @@ final class grading_webservices_test extends \advanced_testcase {
     }
 
     /**
-     * Sending -1 must CLEAR a grade that is already there, not just read back as
-     * "no grade" on a row that never held one.
+     * Sending -1 clears a grade that is already stored.
      *
-     * This is the light reset the marking panel performs when a teacher types
-     * "-" (or any stray non-numeric value) into the grade box: clear the mark,
-     * leave the feedback and the submission alone. It used to be a silent no-op
-     * for assignments — assign_adapter::save_grade() handed core a null grade and
-     * assign::apply_grade_to_user() guards its write with isset($formdata->grade),
-     * so the previous mark survived, the save still reported success, and the
-     * teacher's cleared grade came back on the next page load.
+     * This is the light reset the marking panel sends when a teacher types "-" (or
+     * another non-numeric value) into the grade box: clear the mark, keep the feedback
+     * and the submission. Core's assign::apply_grade_to_user() skips a null grade, so
+     * the adapter writes the -1 sentinel itself; see assign_adapter::save_grade().
      *
-     * test_save_grade_negative_one_means_no_grade above cannot catch that: with no
-     * grade ever saved, assign_grades.grade is already -1 and the assertion holds
-     * whether or not the clear does anything. Hence the seeded grade here, asserted
-     * before the clear so the test cannot pass vacuously.
+     * The grade is seeded and asserted first: with no grade ever saved,
+     * assign_grades.grade is already -1 and the test would pass without the clear.
      */
     public function test_save_grade_negative_one_clears_an_existing_grade(): void {
         global $DB, $CFG;
@@ -203,8 +197,7 @@ final class grading_webservices_test extends \advanced_testcase {
         $scenario = $this->create_scenario_with_submission();
         $student = $scenario->students[0];
 
-        // Seed a real grade, and prove it landed — without this the clear below
-        // would have nothing to undo.
+        // Seed a real grade and prove it landed, so the clear below has something to undo.
         save_grade::execute($scenario->cm->id, $student->id, 85.0, '<p>Great work!</p>');
         $seeded = get_grade_data::execute($scenario->cm->id, $student->id);
         $this->assertEquals(85.0, $seeded['grade'], 'Precondition: the grade to be cleared must exist.');

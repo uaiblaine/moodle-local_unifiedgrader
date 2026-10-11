@@ -59,7 +59,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Moodle core's composer.json requires php >=8.3, so 8.2 cannot install it.
+        # No 8.2: every PHP runs against every branch, and Moodle 5.2's composer.json
+        # requires php >=8.3.
         php: ['8.3', '8.4']
         # One entry per branch in version.php $plugin->supported. Keep the two in step:
         # a branch listed there and missing here ships unvalidated.
@@ -110,15 +111,11 @@ jobs:
       - name: Development Leftover Checker
         if: ${{ !cancelled() }}
         run: |
-          # Same patterns as the fleet's reusable workflow, with two differences.
+          # Same patterns as the leftover check in moodle-an-hochschulen/moodle-workflows,
+          # except that thirdparty/ is skipped: the minified PDF.js bundle contains a
+          # development marker, and vendored code (thirdpartylibs.xml) is never edited.
           #
-          # thirdparty/ is skipped: PDF.js ships a development marker inside its
-          # minified bundle and vendored code is never edited. thirdpartylibs.xml
-          # declares pdfjs, fabric and pdflib.
-          #
-          # The patterns are assembled from halves rather than written out, because
-          # a checker that spells its own markers matches itself — the first run of
-          # this step failed on this very file.
+          # The patterns are assembled from halves so that this file does not match them.
           P1="@test""me"
           P2="TO""DO"
           P3="<<<<""<<< HEAD"

@@ -557,12 +557,10 @@ final class quiz_adapter_test extends \advanced_testcase {
      * Build a quiz attempt with one manually-graded essay, mark it, and let
      * mod_quiz compute the overall grade from it.
      *
-     * Shaped after core's own helper in
-     * mod/quiz/tests/quiz_notify_attempt_manual_grading_completed_test.php,
-     * which is the file that already absorbed the traps here: the attempt has
-     * to be started, submitted and grade-submitted before a manual mark means
-     * anything, quiz_attempts.sumgrades has to be written back from the usage,
-     * and only then does recompute_final_grade() populate quiz_grades.
+     * Follows the helper in core's mod/quiz/tests/quiz_notify_attempt_manual_grading_completed_test.php:
+     * the attempt must be started, submitted and grade-submitted before a manual mark
+     * counts, quiz_attempts.sumgrades must be written back from the usage, and only
+     * then does recompute_final_grade() populate quiz_grades.
      *
      * @param \stdClass $scenario Scenario from create_grading_scenario('quiz').
      * @param \stdClass $student The student to build the attempt for.
@@ -575,8 +573,8 @@ final class quiz_adapter_test extends \advanced_testcase {
         $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
         $cat = $questiongenerator->create_question_category();
         $essay = $questiongenerator->create_question('essay', null, ['category' => $cat->id]);
-        // Weight 10 so a mark of 6 is in range: manual_grade() takes a MARK, and
-        // the essay generator's default maxmark is 1.
+        // Max mark 10 so a mark of 6 is in range: manual_grade() takes a mark, not a
+        // fraction, and the essay generator's default maxmark is 1.
         quiz_add_quiz_question($essay->id, $scenario->activity, 0, 10);
 
         $quizobj = \mod_quiz\quiz_settings::create($scenario->activity->id);
@@ -600,8 +598,7 @@ final class quiz_adapter_test extends \advanced_testcase {
         $attemptobj->process_submit($now - 20 * MINSECS, false);
         $attemptobj->process_grade_submission($now - 10 * MINSECS);
 
-        // Award the manual mark, which is the only sanctioned way to move a
-        // quiz total: mod_quiz derives quiz_grades from the attempt sumgrades.
+        // Award the manual mark: mod_quiz derives quiz_grades from the attempt sumgrades.
         $attemptobj->get_question_usage()->manual_grade(1, 'Marked.', $mark, FORMAT_HTML);
         \question_engine::save_questions_usage_by_activity($attemptobj->get_question_usage());
         $DB->update_record('quiz_attempts', (object) [
@@ -613,24 +610,16 @@ final class quiz_adapter_test extends \advanced_testcase {
     }
 
     /**
-     * A quiz total typed into the marking panel is deliberately NOT persisted.
+     * A quiz total typed into the marking panel is not persisted.
      *
-     * quiz_grades is derived state: mod_quiz\grade_calculator rewrites it from
-     * the attempt sumgrades and quiz.grademethod on every recompute, and the
-     * recomputes fire from everywhere - a per-question save, deleting another
-     * attempt, a regrade, a max-grade change, and the update_overdue_attempts
-     * cron task with no human action at all. quiz_grades has no override column
-     * (mod/quiz/db/install.xml even documents the field as "not affected by
-     * overrides in the gradebook"), and core's own manual-grading report offers
-     * per-question marks only, never a total.
+     * quiz_grades is derived state: mod_quiz\grade_calculator rewrites it from the
+     * attempts' sumgrades and quiz.grademethod on every recompute (a question mark, an
+     * attempt deletion, a regrade, a max-grade change, the overdue-attempts task), and
+     * it has no override column. A typed total would be reverted later without notice,
+     * so quiz_adapter::save_grade() ignores $grade; teachers move the total through the
+     * question marks, as in core's manual-grading report.
      *
-     * So save_grade() ignoring its $grade argument for quizzes is correct, not
-     * an oversight: honouring it would write a value that survives the request,
-     * passes a manual test, and is then silently reverted by cron hours later -
-     * a worse failure than not accepting it. Teachers move a quiz total by
-     * changing the question marks, which this adapter does persist.
-     *
-     * This test exists so nobody "fixes" the ignored argument later.
+     * Changes that must make it fail: save_grade() writing $grade to quiz_grades.
      */
     public function test_save_grade_does_not_persist_a_typed_quiz_total(): void {
         global $DB;
@@ -663,10 +652,8 @@ final class quiz_adapter_test extends \advanced_testcase {
             'A typed quiz total must not overwrite the engine-computed grade.'
         );
 
-        /* Control. Without it the assertion above passes for the wrong reason -
-           it would hold just as well if save_grade() had thrown, or done
-           nothing at all. The feedback proves the call really ran and really
-           did the work it IS responsible for. */
+        // Control: the stored feedback proves the call did the work it is responsible for,
+        // so the unchanged total above is not the result of an early return.
         $qfb = $DB->get_record('local_unifiedgrader_qfb', [
             'cmid' => $s->scenario->cm->id,
             'userid' => $student->id,

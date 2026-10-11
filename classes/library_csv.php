@@ -65,7 +65,7 @@ class library_csv {
         );
         // The code is matched in PHP rather than with coursecode = :coursecode. MariaDB's
         // default collation folds case and ignores trailing spaces, so that predicate
-        // exported a different set of rows for the same bucket there than on PostgreSQL.
+        // would also export the bucket's case and trailing-space variants there.
         if ($coursecode !== null) {
             $records = array_filter($records, fn($r) => $r->coursecode === $coursecode);
         }
@@ -76,10 +76,9 @@ class library_csv {
     /**
      * Whether a user exporting a bucket is its owner, and so needs no moderation capability.
      *
-     * Both ids are compared as ints. $USER->id comes back from the database as a string on
-     * every supported driver while the requested owner is cleaned as PARAM_INT, so comparing
-     * the two raw values strictly never matched, and every teacher exporting their own bucket
-     * was asked for local/unifiedgrader:moderatelibraries.
+     * Both ids are compared as ints: $USER->id is a string, as every id read from the database
+     * is, while the requested owner is cleaned as PARAM_INT, so a strict comparison of the raw
+     * values never matches and every owner would be asked for local/unifiedgrader:moderatelibraries.
      *
      * @param int $owner Owner of the bucket being exported.
      * @param int $viewerid The user asking for the export.
@@ -166,11 +165,12 @@ class library_csv {
      * a spreadsheet, and a leading tab or carriage return can be read as one too. Comment
      * text, tag names and owner names are written by teachers, so an export must not hand
      * them to whoever opens it as live formulas. Such a cell gets a leading single quote,
-     * which spreadsheets take as "this is text" and do not display.
+     * which spreadsheets take as text.
      *
      * A cell that already starts with a quote gets one as well. That is what keeps the rule
      * reversible: an exported cell starts with a quote only when this method put it there,
-     * so unescape_cell() can always remove exactly one.
+     * so unescape_cell() can always remove exactly one. Core's
+     * {@see \core\dataformat::escape_spreadsheet_formula()} is not reversible that way.
      *
      * @param string $value Cell text.
      * @return string
@@ -223,9 +223,9 @@ class library_csv {
     ): array {
         global $DB;
 
-        // Excel's "CSV UTF-8" starts the file with a byte order mark. Left in place it became
+        // Excel's "CSV UTF-8" starts the file with a byte order mark. Left in place it becomes
         // part of the first header name, so that column (coursecode or ownerid, in the shapes
-        // this class exports) was never found. Core's csv_import_reader strips it the same way.
+        // this class exports) is never found. Core's csv_import_reader strips it the same way.
         $csvcontent = \core_text::trim_utf8_bom($csvcontent);
 
         $fh = fopen('php://temp', 'r+');
@@ -266,8 +266,8 @@ class library_csv {
             }
 
             // Every cell must be valid UTF-8 before any of it reaches a query. PostgreSQL rejects
-            // an invalid byte sequence even as a SELECT parameter, and the exception used to abort
-            // the import part way through, keeping the rows before it and returning no summary.
+            // an invalid byte sequence in any parameter, and the exception would abort the import
+            // part way through, keeping the rows before it and returning no summary.
             $row = self::row_to_utf8($row);
             if ($row === null) {
                 $errors[] = get_string('clibcsv_row_bad_encoding', 'local_unifiedgrader', $rownum);
@@ -312,8 +312,8 @@ class library_csv {
             }
 
             // Lengths are checked before anything is written. The comment row is inserted before
-            // its tags, so a tag too long for its column used to leave the comment behind, untagged,
-            // when the tag insert failed and took the rest of the import down with it.
+            // its tags, so a tag too long for its column would fail only after the comment was
+            // saved, leaving it untagged and aborting the rest of the import.
             if (\core_text::strlen($coursecode) > self::MAX_CODE_LENGTH) {
                 $errors[] = get_string('clibcsv_row_coursecode_too_long', 'local_unifiedgrader', $rownum);
                 continue;
@@ -339,8 +339,8 @@ class library_csv {
             //
             // Compared in PHP, not with a coursecode = :coursecode AND content
             // = :content predicate: MariaDB's default collation folds case and
-            // ignores trailing spaces, so that predicate skipped a row there
-            // that PostgreSQL imported, for the same file.
+            // ignores trailing spaces, so that predicate would skip a row there
+            // that PostgreSQL imports from the same file.
             if (!isset($existing[$userid])) {
                 $existing[$userid] = [];
                 $ownerrows = $DB->get_records('local_unifiedgrader_clib', ['userid' => $userid], '', 'id, coursecode, content');
@@ -387,9 +387,9 @@ class library_csv {
     /**
      * The notice an import page shows for a result of import().
      *
-     * It names the rows that were rejected as well as the counts. A row rejected for its encoding,
+     * It names the first five rejected rows as well as the counts. A row rejected for its encoding,
      * a course code or tag that is too long, or an owner that cannot be resolved is neither imported
-     * nor skipped, so a notice built from the two counts alone lost it without a word.
+     * nor skipped, so the two counts alone do not show it.
      *
      * @param array $result Output of import().
      * @return string
@@ -414,7 +414,7 @@ class library_csv {
      *
      * Only when no owner filter is set. Once an admin has filtered the page to one teacher,
      * the import goes into that teacher's library whatever the file says, as the page's help
-     * text promises; an ownerid column used to override the filter row by row.
+     * text (clibmod_import_csv_help) promises.
      *
      * @param int $filteruser Owner filter on the moderation page (0 = none).
      * @return bool
@@ -427,8 +427,8 @@ class library_csv {
      * Make every cell of a CSV row valid UTF-8, or report that one cannot be.
      *
      * A cell that is not valid UTF-8 is read as Windows-1252, which is what Excel on Windows
-     * writes when a file is saved as plain "CSV", by far the usual source of such a file. A
-     * cell that is still not valid UTF-8 after that is left for the caller to report.
+     * writes when a file is saved as plain "CSV". A cell that is still not valid UTF-8 after
+     * that is left for the caller to report.
      *
      * @param array $row One row as fgetcsv() returns it.
      * @return array|null The row with every cell valid UTF-8, or null when one cannot be converted.

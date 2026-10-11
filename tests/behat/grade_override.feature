@@ -62,10 +62,10 @@ Feature: Manual grade override locks against subsequent rubric edits
     # A full rubric (10 of 10) is the whole activity grade, 20.
     Then the rubric total shows "10 pts"
     And the overall grade shows "20"
-    # Typing in the grade box recomputed the marking-guide total, which is always
-    # 0 on a rubric page, so the badge read "0 / 0".
+    # Typing in the grade box must recompute the rubric total, not the
+    # marking-guide one, which is always 0 on a rubric page and reads "0 / 0".
     When I enter "15" as the overall grade
     Then the rubric total shows "10 pts"
-    # And "Reset to rubric total" wrote that 0 into the box.
+    # And "Reset to rubric total" must put the rubric grade back, not that 0.
     When I click on "Reset to rubric total" "button"
     Then the overall grade shows "20"

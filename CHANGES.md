@@ -23,6 +23,13 @@ escaped form.
   job on core's `main` is left out, since this fork does not declare 5.3 yet.
 - `.gitattributes`: upstream's release exclusions and this fork's are combined.
 
+### Comments
+
+The comments this fork added since upstream were audited against the code. Thirty-one that no longer matched
+it were corrected (stale method names, a save path that moved, a test that scans more than its comment said),
+and references to the development environment were removed. Upstream's own comments are unchanged except
+where a fork change had made one false. No code changed; `amd/build` differs only in the source map.
+
 ## v2.11.1+uai.3 (2026091502)
 
 Fixes to the comment library moderation and CSV tools that upstream added in v2.10.0 and v2.11.0,

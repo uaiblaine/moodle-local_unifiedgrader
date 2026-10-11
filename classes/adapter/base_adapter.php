@@ -434,17 +434,17 @@ abstract class base_adapter {
     /**
      * Whether a gradebook lock holds a mark for this user that a clear cannot remove.
      *
-     * A lock is the one gradebook block the grader must not try to work around:
-     * clear_recoverable_gradebook_block() lifts an override but leaves a lock
-     * alone, and the gradebook then refuses every update to the cell. Clearing
-     * the activity's own grade under one leaves the gradebook keeping the mark.
+     * clear_recoverable_gradebook_block() lifts an override but never a lock, and
+     * grade_item::update_raw_grade() refuses every write to a locked cell, so
+     * clearing the activity's own grade under a lock leaves the gradebook keeping
+     * the mark.
      *
-     * Only a lock over an actual mark counts. When the column is locked but this
-     * student has no gradebook grade, there is nothing for a clear to leave
-     * behind, and refusing would block the cleanup "--" exists for: an orphan
-     * submission row left by an accidental click on a student who never submitted.
+     * Only a lock over an actual mark counts. With no gradebook grade there is
+     * nothing for a clear to leave behind, and refusing would block what "--"
+     * exists for: removing an orphan submission row from a student who never
+     * submitted.
      *
-     * @param int $userid
+     * @param int $userid Student user id.
      * @return bool True when the grade is locked and the gradebook holds a grade for it.
      */
     public function is_gradebook_grade_locked(int $userid): bool {
@@ -459,11 +459,15 @@ abstract class base_adapter {
     /**
      * Whether the deliberate "--" reset must be refused for this user.
      *
-     * By default, whenever a gradebook lock holds a mark: the reset clears the
-     * activity's own grade and the gradebook refuses to follow. An adapter whose
-     * reset cannot make the two disagree overrides this.
+     * By default, whenever a gradebook lock holds a mark: a reset that clears the
+     * activity's own grade (assign, whole-forum) would leave the gradebook keeping
+     * the mark, and the default reset, which only lifts an override, would change
+     * nothing while reporting success. An adapter whose reset cannot make the two
+     * disagree overrides this.
      *
-     * @param int $userid
+     * {@see \local_unifiedgrader\external\save_grade::execute()} checks it before a reset.
+     *
+     * @param int $userid Student user id.
      * @return bool
      */
     public function reset_blocked_by_lock(int $userid): bool {

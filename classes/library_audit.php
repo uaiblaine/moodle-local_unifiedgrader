@@ -245,7 +245,7 @@ class library_audit {
 
         // Distinct in PHP: SELECT DISTINCT uses the database collation, which on
         // MariaDB returns one spelling for 'BIB3129' and 'bib3129', so the pair
-        // was never reported as competing variants there.
+        // would never be reported as competing variants there.
         $sql = "SELECT coursecode
                   FROM {local_unifiedgrader_clib}";
 
@@ -385,8 +385,7 @@ class library_audit {
 
         // The code is matched in PHP rather than in the query. MariaDB's default collation
         // folds case and ignores trailing spaces, so a coursecode = :coursecode predicate
-        // returned the rows of 'bib3129' and 'BIB3129 ' for bucket 'BIB3129' there, and only
-        // that bucket's rows on PostgreSQL.
+        // would also return the rows of 'bib3129' and 'BIB3129 ' for bucket 'BIB3129' there.
         $records = array_filter(
             $DB->get_records('local_unifiedgrader_clib', ['userid' => $userid], 'timecreated ASC'),
             fn($r) => $r->coursecode === $coursecode,
@@ -525,8 +524,8 @@ class library_audit {
         if (empty($commentids)) {
             return 0;
         }
-        // Refused before the UPDATE, as reassign_comments() refuses a bad owner. A code longer
-        // than the column made the database throw instead, aborting the page with an error.
+        // Refused before the UPDATE, as reassign_comments() refuses a bad owner: otherwise the
+        // database rejects a code longer than the column with a write exception.
         if (\core_text::strlen($newcode) > library_csv::MAX_CODE_LENGTH) {
             throw new \moodle_exception('clibmod_code_too_long', 'local_unifiedgrader');
         }
@@ -577,8 +576,8 @@ class library_audit {
         }
 
         // Read first so the count reflects rows that exist, not the size of the requested
-        // set, as recode_comments() and delete_comments() do. The count goes into the
-        // library_repaired event, the tool's only audit trail.
+        // set, as in recode_comments() and delete_comments(): callers log it in the
+        // library_repaired event.
         [$insql, $params] = $DB->get_in_or_equal($commentids, SQL_PARAMS_NAMED, 'cid');
         $targets = $DB->get_fieldset_select('local_unifiedgrader_clib', 'id', "id {$insql}", $params);
         if (empty($targets)) {
@@ -786,9 +785,9 @@ class library_audit {
             //
             // Compared in PHP, not with a coursecode = :coursecode predicate.
             // MariaDB's default collation folds case and ignores trailing
-            // spaces, so that predicate matched a 'bib3129' row for a legacy
-            // comment filed under 'BIB3129', skipped the insert, and then
-            // deleted the only copy with the original spelling below.
+            // spaces, so that predicate would match a 'bib3129' row for a
+            // legacy comment filed under 'BIB3129', skip the insert, and then
+            // delete the only copy with the original spelling below.
             if (!isset($existing[$ownerid])) {
                 $existing[$ownerid] = [];
                 $ownerrows = $DB->get_records('local_unifiedgrader_clib', ['userid' => $ownerid], '', 'id, coursecode, content');

@@ -19,15 +19,11 @@ namespace local_unifiedgrader;
 /**
  * A Behat context file may not carry a MOODLE_INTERNAL guard.
  *
- * Behat requires tests/behat/behat_*.php step-definition files BEFORE it includes
- * config.php, so MOODLE_INTERNAL is not defined yet and the bare die() exits the whole
- * Behat process. Silently: exit code 0, no output, no error — and not only for this
- * plugin, but for every plugin on the site, because they all run in that one process.
- *
- * This is not hypothetical. The guard shipped here once and took the suite down; it was
- * removed on 2026-07-31, that fix never reached the remote, and the guard was still in
- * place on main until 2026-08-11. Prose did not hold it, so a test does. Core's own
- * context files carry the comment below in place of the guard, for exactly this reason.
+ * Behat requires tests/behat/behat_*.php step-definition files before it includes
+ * config.php, so MOODLE_INTERNAL is not defined yet and the guard's die() ends the whole
+ * Behat process with exit code 0 and no output, stopping the features of every plugin on
+ * the site, not only this one. Core's own context files carry a "NOTE: no MOODLE_INTERNAL
+ * test here" comment instead of the guard for this reason.
  *
  * @package    local_unifiedgrader
  * @category   test
