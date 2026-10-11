@@ -28,7 +28,8 @@
             "emojis": 1, "duration": 3540, "durationformatted": "59m",
             "sessioncount": 1
         },
-        "hasattended": true
+        "hasattended": true,
+        "stackallsessions": false
     }
 }}
 <div data-region="bbb-preview" class="d-flex flex-column gap-3">
@@ -154,7 +155,7 @@
             {{! Aggregate (all sessions) tiles — visible by default. Switcher
                 JS toggles visibility between this block and the per-session
                 blocks below when the teacher selects an individual recording. }}
-            <div data-region="bbb-tiles-aggregate" class="{{^showaggregatetiles}}d-none{{/showaggregatetiles}}">
+            <div data-region="bbb-tiles-aggregate" class="{{^stackallsessions}}{{^showaggregatetiles}}d-none{{/showaggregatetiles}}{{/stackallsessions}}">
                 {{#activitypoints.hasactivityscore}}
                 <div class="alert alert-info py-2 px-3 mb-2 d-flex align-items-center justify-content-between">
                     <div>
@@ -207,7 +208,9 @@
             </div>
 
             {{#activitypoints.sessions}}
-            <div data-region="bbb-tiles-session" data-recordingref="{{recordingref}}" class="{{^isactive}}d-none{{/isactive}}">
+            <div data-region="{{^stackallsessions}}bbb-tiles-session{{/stackallsessions}}{{#stackallsessions}}bbb-tiles-session-static{{/stackallsessions}}"
+                 data-recordingref="{{recordingref}}"
+                 class="{{#stackallsessions}}mt-3 pt-3 border-top{{/stackallsessions}}{{^stackallsessions}}{{^isactive}}d-none{{/isactive}}{{/stackallsessions}}">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div class="small text-muted">
                         {{#str}} bbb_session_label_prefix, local_unifiedgrader {{/str}} {{sessionlabel}}

@@ -23,7 +23,10 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        # Moodle 5.3 requires PostgreSQL 17; 5.0 requires 14 or newer, so one
+        # image serves both. The 5.3 job failed its install step on postgres:16
+        # with "version 17 is required and you are running 16.15".
+        image: postgres:17
         env:
           POSTGRES_USER: 'postgres'
           POSTGRES_HOST_AUTH_METHOD: 'trust'
@@ -32,15 +35,26 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
 
       mariadb:
-        image: mariadb:10.11
+        # Moodle 5.3 requires MariaDB 11.4; 5.0 requires 10.11 or newer, so
+        # this one image covers both branches too.
+        image: mariadb:11.4
         env:
-          MYSQL_USER: 'root'
+          # No MYSQL_USER here: root already exists, and asking the newer images
+          # to create a user called root is rejected outright.
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
           MYSQL_CHARACTER_SET_SERVER: "utf8mb4"
           MYSQL_COLLATION_SERVER: "utf8mb4_unicode_ci"
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 3
+        # healthcheck.sh, not mysqladmin: MariaDB 11 dropped the mysql-prefixed
+        # binaries, so `mysqladmin ping` is not found and the container is
+        # declared unhealthy even though the server logs "ready for
+        # connections". Both services are attached to every job, so that one
+        # failing healthcheck took down the pgsql jobs too. The script ships
+        # with the image and works on 10.11 as well.
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s --health-timeout 5s --health-retries 5
 
     strategy:
       fail-fast: false

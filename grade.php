@@ -156,7 +156,11 @@ $templatedata = [
     'canloginas' => $canloginas,
     'hassatsmail' => $hassatsmail,
     'issimplegrading' => $activityinfo['gradingmethod'] === 'simple',
-    'courseshortname' => format_string($course->shortname),
+    // Plain text, not HTML: this value is rendered through an escaping sink
+    // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+    // more. Letting format_string() escape as well is what turned a course
+    // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+    'courseshortname' => format_string($course->shortname, true, ['escape' => false]),
     'courseurl' => (new moodle_url('/course/view.php', ['id' => $course->id]))->out(false),
     'activityurl' => (new moodle_url('/mod/' . $cm->modname . '/view.php', ['id' => $cm->id]))->out(false),
     'submissionsurl' => match ($cm->modname) {
@@ -168,7 +172,7 @@ $templatedata = [
     'draftitemid' => 0,
     'hasgroupmode' => $groupmode != NOGROUPS,
     'groupsjson' => json_encode(array_values(array_map(function ($g) {
-        return ['id' => (int) $g->id, 'name' => format_string($g->name)];
+        return ['id' => (int) $g->id, 'name' => format_string($g->name, true, ['escape' => false])];
     }, $availablegroups))),
     'usergroupidsjson' => json_encode($usergroupids),
     'currentgroup' => $currentgroup,
@@ -178,7 +182,7 @@ $templatedata = [
     'showpostgrades' => $showpostgrades,
     'showschedulepost' => $showschedulepost,
     'coursecode' => \local_unifiedgrader\course_code_helper::extract_code($course->shortname),
-    'coursefullname' => format_string($course->fullname),
+    'coursefullname' => format_string($course->fullname, true, ['escape' => false]),
     'enablereportform' => !empty(get_config('local_unifiedgrader', 'enable_report_form')),
     'reportformurl' => get_config('local_unifiedgrader', 'report_form_url') ?: '',
     'graderfullname' => fullname($USER),

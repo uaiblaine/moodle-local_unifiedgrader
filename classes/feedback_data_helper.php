@@ -172,6 +172,94 @@ class feedback_data_helper {
     }
 
     /**
+     * The rubric/marking-guide keys every feedback template expects.
+     *
+     * Each activity type builds its own template context, and the nine keys
+     * below were repeated in each of them. In v2.12.0 the BigBlueButton branch
+     * parsed its grading data and then did not pass it on: the criteria reached
+     * the PDF but never the screen, and the omission was invisible because the
+     * surrounding lines are identical in all four branches. Naming the set once
+     * makes a branch that forgets it obvious.
+     *
+     * @param array $gradinginfo Output of parse_grading_data().
+     * @return array Merge into the template context with the + operator.
+     */
+    public static function grading_template_data(array $gradinginfo): array {
+        return [
+            'hasrubric' => $gradinginfo['hasrubric'],
+            'rubriccriteria' => $gradinginfo['rubriccriteria'],
+            'rubrictotal' => $gradinginfo['rubrictotal'],
+            'hasguide' => $gradinginfo['hasguide'],
+            'guidecriteria' => $gradinginfo['guidecriteria'],
+            'guidetotal' => $gradinginfo['guidetotal'],
+            'guidemaxtotal' => $gradinginfo['guidemaxtotal'],
+            'hasadvancedgrading' => $gradinginfo['hasadvancedgrading'],
+            'gradingmethodname' => $gradinginfo['gradingmethodname'],
+        ];
+    }
+
+    /**
+     * A local copy of the site's logo for the feedback PDF, or null when unset.
+     *
+     * TCPDF needs a file it can read, not a pluginfile URL — fetching that over
+     * HTTP would mean the server calling itself and authenticating to do so. The
+     * stored file is copied into the request's own temp directory instead, which
+     * Moodle removes at the end of the request without us tracking it.
+     *
+     * Looked up in the order Moodle itself prefers: the compact site logo, then
+     * the full one, then the active theme's equivalents for themes that keep
+     * their own rather than setting the core pair. A site with none configured
+     * gets null and the PDF simply renders without a logo.
+     *
+     * @return string|null Absolute path to a readable image file.
+     */
+    public static function resolve_site_logo_path(): ?string {
+        global $CFG;
+
+        $fs = \get_file_storage();
+        $systemcontext = \context_system::instance();
+
+        $candidates = [
+            ['core_admin', 'logocompact'],
+            ['core_admin', 'logo'],
+            ['theme_' . $CFG->theme, 'logocompact'],
+            ['theme_' . $CFG->theme, 'logo'],
+        ];
+
+        foreach ($candidates as [$component, $filearea]) {
+            $files = $fs->get_area_files(
+                $systemcontext->id,
+                $component,
+                $filearea,
+                0,
+                'itemid',
+                false,
+            );
+            $file = reset($files);
+            if (!$file) {
+                continue;
+            }
+            // Guard the format: TCPDF reads PNG, JPEG and GIF, and an SVG site
+            // logo (perfectly valid on screen) would otherwise abort the PDF.
+            if (!in_array($file->get_mimetype(), ['image/png', 'image/jpeg', 'image/gif'], true)) {
+                continue;
+            }
+
+            $extension = match ($file->get_mimetype()) {
+                'image/jpeg' => '.jpg',
+                'image/gif' => '.gif',
+                default => '.png',
+            };
+            $path = \make_request_directory() . '/logo' . $extension;
+            $file->copy_content_to($path);
+
+            return $path;
+        }
+
+        return null;
+    }
+
+    /**
      * Parse rubric/marking guide data for display.
      *
      * The teacher-authored HTML fields (`description`, `definition`, `remark`)

@@ -56,6 +56,18 @@ class feedback_summary_pdf extends \pdf {
     /** @var int White. */
     private const COLOR_WHITE = 0xFFFFFF;
 
+    /** @var int Tint of the primary blue, for captions on a primary-filled tile. */
+    private const COLOR_PRIMARY_TINT = 0xCFE2FF;
+
+    /** @var int Hairline border colour. */
+    private const COLOR_BORDER = 0xDEE2E6;
+
+    /** @var float Corner radius for tiles and chips, in mm. */
+    private const RADIUS = 1.6;
+
+    /** @var float Width of the score column in the top band, in mm. */
+    private const SCORE_COLUMN_W = 54;
+
     /** @var int Page left/right margin in mm. */
     private const MARGIN_H = 15;
 
@@ -83,25 +95,51 @@ class feedback_summary_pdf extends \pdf {
      *     (e.g. rendered quiz attempt). Bootstrap classes are converted to
      *     inline styles for TCPDF compatibility.
      *   - additionalcontenttitle (string) Optional. Heading for additional pages.
+     *   - analytics (array) Optional. Engagement figures for attendance-graded
+     *     activities: {hasengagement, sessioncount, totals, sessions[]}.
+     *   - annotations (array) Optional. Timestamped recording comments, each
+     *     with 'timestamp', 'text' and 'sessionlabel'.
+     *   - logopath (string|null) Optional. Absolute path to a readable image
+     *     file for the site logo, as resolved by
+     *     feedback_data_helper::resolve_site_logo_path().
      * @return string PDF content as binary string
      */
     public function generate(array $data): string {
+        // Footer through TCPDF's own callback rather than drawn once: the
+        // annotation pages are added after the summary, and a footer painted a
+        // single time left them with no date, no attribution and no page
+        // numbering at all.
+        $this->footerdata = $data;
         $this->setPrintHeader(false);
-        $this->setPrintFooter(false);
+        $this->setPrintFooter(true);
+        $this->SetFooterMargin(12);
         $this->SetMargins(self::MARGIN_H, self::MARGIN_TOP, self::MARGIN_H);
-        $this->SetAutoPageBreak(true, 15);
+        $this->SetAutoPageBreak(true, 18);
         $this->setPageUnit('mm');
 
         $this->AddPage('P', 'A4');
         $this->SetFont('helvetica', '', 10);
 
         $this->render_header_band($data);
-        $this->render_grade_display($data);
+        // Score and feedback share the top band: the mark on the left, what the
+        // teacher said about it on the right. A student opening this wants both
+        // at once, and stacking them full width pushed the feedback below the
+        // fold on every summary.
+        $this->render_grade_and_feedback($data);
         $this->render_penalties($data);
+        // Engagement below the band. On an attendance-graded activity these
+        // figures are the evidence the mark rests on, so they stay above the
+        // criterion-by-criterion breakdown.
+        $this->render_analytics_widgets($data);
         $this->render_plagiarism_section($data);
-        $this->render_feedback_section($data);
         $this->render_grading_section($data);
-        $this->render_footer($data);
+
+        // Timestamped recording comments (BBB). A recording cannot be played
+        // from a PDF, so the annotations are listed as text against their
+        // position in the video instead of embedding the player.
+        if (!empty($data['annotations'])) {
+            $this->render_annotation_comments($data);
+        }
 
         // Additional content pages (e.g. quiz attempt).
         if (!empty($data['additionalcontent'])) {
@@ -118,86 +156,228 @@ class feedback_summary_pdf extends \pdf {
      */
     private function render_header_band(array $data): void {
         $pagewidth = $this->getPageWidth();
-        $bandheight = 14;
-        $x = 0;
+        $bandheight = 24;
         $y = $this->GetY();
 
-        // Blue header band.
+        // Blue header band, full bleed.
         $this->set_fill_from_hex(self::COLOR_PRIMARY);
-        $this->Rect($x, $y, $pagewidth, $bandheight, 'F');
+        $this->Rect(0, $y, $pagewidth, $bandheight, 'F');
 
-        // Activity name (left).
-        $this->SetXY(self::MARGIN_H, $y + 2);
+        // The logo sits on a white chip rather than straight on the blue. A site
+        // logo is drawn for a light background far more often than a dark one,
+        // and a dark mark on a dark band is unreadable; the chip makes any logo
+        // legible without us having to know what is in it.
+        $textwidth = $pagewidth - (self::MARGIN_H * 2);
+        $logopath = $data['logopath'] ?? null;
+        if (!empty($logopath) && is_readable($logopath)) {
+            $chipheight = 16;
+            $padding = 2;
+            // Size the chip to the logo rather than fixing it: a square roundel
+            // in a letterbox chip reads as a mistake, and a wide wordmark in a
+            // square one has nowhere to go. The image's own ratio sets the
+            // width, clamped so neither extreme takes over the band.
+            $imageheight = $chipheight - ($padding * 2);
+            $aspect = 1.0;
+            $dimensions = @getimagesize($logopath);
+            if ($dimensions && (int) $dimensions[1] > 0) {
+                $aspect = (int) $dimensions[0] / (int) $dimensions[1];
+            }
+            $chipwidth = min(46, max(16, ($imageheight * $aspect) + ($padding * 2)));
+            $chipx = $pagewidth - self::MARGIN_H - $chipwidth;
+            $chipy = $y + (($bandheight - $chipheight) / 2);
+
+            $this->set_fill_from_hex(self::COLOR_WHITE);
+            $this->RoundedRect($chipx, $chipy, $chipwidth, $chipheight, self::RADIUS, '1111', 'F');
+
+            // The 'CM' alignment fits the image inside the box, centred and
+            // keeping its ratio, so a tall roundel and a wide wordmark both sit
+            // correctly.
+            $this->Image(
+                $logopath,
+                $chipx + $padding,
+                $chipy + $padding,
+                $chipwidth - ($padding * 2),
+                $chipheight - ($padding * 2),
+                '',
+                '',
+                '',
+                false,
+                300,
+                '',
+                false,
+                false,
+                0,
+                'CM'
+            );
+
+            // Keep the heading clear of the chip.
+            $textwidth = $chipx - self::MARGIN_H - 4;
+        }
+
+        // Activity name, then course and student beneath it. Stacked on the left
+        // rather than split across the band: a course name carrying a code, a
+        // title and a term runs long, and it used to collide with the heading.
         $this->set_text_from_hex(self::COLOR_WHITE);
-        $this->SetFont('helvetica', 'B', 13);
-        $this->Cell(100, 5, $data['activityname'], 0, 0, 'L');
+        $this->SetFont('helvetica', 'B', 14);
+        $this->SetXY(self::MARGIN_H, $y + 4);
+        $this->Cell($textwidth, 6, $data['activityname'], 0, 0, 'L');
 
-        // Course name (right).
-        $this->SetFont('helvetica', '', 9);
-        $this->SetXY($pagewidth - self::MARGIN_H - 80, $y + 2);
-        $this->Cell(80, 5, $data['coursename'], 0, 0, 'R');
+        $this->set_text_from_hex(self::COLOR_PRIMARY_TINT);
+        $this->SetFont('helvetica', '', 8.5);
+        $this->SetXY(self::MARGIN_H, $y + 11);
+        $this->Cell($textwidth, 4, $data['coursename'], 0, 0, 'L');
 
-        // Student name (left, second line).
-        $this->SetXY(self::MARGIN_H, $y + 8);
-        $this->SetFont('helvetica', '', 9);
-        $this->set_text_from_hex(0xCFE2FF);
-        $this->Cell(100, 4, $data['studentname'], 0, 0, 'L');
+        $this->SetXY(self::MARGIN_H, $y + 15.5);
+        $this->SetFont('helvetica', 'B', 8.5);
+        $this->Cell($textwidth, 4, $data['studentname'], 0, 0, 'L');
 
-        $this->SetY($y + $bandheight + 4);
+        $this->SetY($y + $bandheight + 6);
     }
 
     /**
-     * Render the large grade display with coloured circle.
+     * Render the score and the overall feedback side by side.
+     *
+     * Shared by every adapter, so an assignment, a forum, a quiz and a BBB
+     * session all open the same way; only what follows the band differs. When a
+     * summary carries no written feedback the score keeps its column rather than
+     * recentring, so two students' PDFs still line up page for page.
      *
      * @param array $data
      */
-    private function render_grade_display(array $data): void {
+    private function render_grade_and_feedback(array $data): void {
         $pagewidth = $this->getPageWidth();
-        $centrex = $pagewidth / 2;
-        $y = $this->GetY();
+        $contentwidth = $pagewidth - (self::MARGIN_H * 2);
+        $top = $this->GetY();
 
+        // Left: the score.
+        $this->render_score_donut($data, self::MARGIN_H, $top, self::SCORE_COLUMN_W);
+        $leftbottom = $this->GetY();
+
+        // Right: what the teacher wrote about it.
+        $gutter = 8;
+        $rightx = self::MARGIN_H + self::SCORE_COLUMN_W + $gutter;
+        $rightwidth = $contentwidth - self::SCORE_COLUMN_W - $gutter;
+
+        $this->SetY($top);
+        $rightbottom = $top;
+        $feedback = trim($data['feedback'] ?? '');
+        if ($feedback !== '') {
+            $this->render_section_heading(
+                get_string('feedback_summary_overall_feedback', 'local_unifiedgrader'),
+                0xF4AD, // Icon: comment-dots.
+                $rightx,
+                $rightwidth
+            );
+
+            // Flatten filter_nida markup to the translated content only (the
+            // badge and hidden original are web chrome), then sanitise for TCPDF.
+            $html = '<div style="font-size: 9pt; color: #212529; line-height: 1.5;">'
+                . $this->sanitise_feedback_html(pdf_text::flatten($feedback))
+                . '</div>';
+
+            $this->writeHTMLCell(
+                $rightwidth,
+                0,
+                $rightx,
+                $this->GetY(),
+                $html,
+                0,
+                1,
+                false,
+                true,
+                'L'
+            );
+            $rightbottom = $this->GetY();
+        }
+
+        $this->SetY(max($leftbottom, $rightbottom) + 4);
+    }
+
+    /**
+     * Draw the grade as a donut: a grey track with the achieved share drawn over
+     * it, and the percentage in the hole.
+     *
+     * A ring rather than a filled disc because the hole is what makes the
+     * proportion readable — a solid circle is the same shape at 40% as at 90%
+     * and says nothing until you read the number inside it.
+     *
+     * @param array $data
+     * @param float $x Left edge of the score column.
+     * @param float $y Top of the score column.
+     * @param float $width Column width; the donut is centred in it.
+     */
+    private function render_score_donut(array $data, float $x, float $y, float $width): void {
         $hasgrade = $data['gradevalue'] !== null && $data['percentage'] !== null;
+        $percentage = $hasgrade ? max(0, min(100, (float) $data['percentage'])) : 0.0;
 
-        // Determine circle colour.
         if (!$hasgrade) {
-            $circlecolor = self::COLOR_MUTED;
-        } else if ($data['percentage'] >= 75) {
-            $circlecolor = self::COLOR_GREEN;
-        } else if ($data['percentage'] >= 50) {
-            $circlecolor = self::COLOR_AMBER;
+            $arccolor = self::COLOR_MUTED;
+        } else if ($percentage >= 75) {
+            $arccolor = self::COLOR_GREEN;
+        } else if ($percentage >= 50) {
+            $arccolor = self::COLOR_AMBER;
         } else {
-            $circlecolor = self::COLOR_RED;
+            $arccolor = self::COLOR_RED;
         }
 
-        // Draw filled circle.
-        $radius = 14;
-        $this->set_fill_from_hex($circlecolor);
-        $this->Circle($centrex, $y + $radius, $radius, 0, 360, 'F');
+        $radius = 17;
+        $thickness = 6;
+        $centrex = $x + ($width / 2);
+        $centrey = $y + $radius + 2;
 
-        // Percentage text inside circle.
-        $this->set_text_from_hex(self::COLOR_WHITE);
+        // The full ring is drawn as two filled discs — one the ring's outer
+        // diameter, one punched back out of its middle — rather than as a
+        // stroked circle. A thick stroke closes on itself at three o'clock and
+        // leaves a visible notch and a stray radial hairline there; a filled
+        // annulus has no seam to show.
+        $this->set_fill_from_hex($percentage >= 100 ? $arccolor : 0xE9ECEF);
+        $this->Circle($centrex, $centrey, $radius + ($thickness / 2), 0, 360, 'F');
+        $this->set_fill_from_hex(self::COLOR_WHITE);
+        $this->Circle($centrex, $centrey, $radius - ($thickness / 2), 0, 360, 'F');
+
+        // Achieved share, drawn from twelve o'clock clockwise. TCPDF sweeps
+        // anticlockwise, so the start angle is set back by the sweep instead. A
+        // full ring is already filled above, so only a partial one is stroked —
+        // which is exactly the case a stroke handles without a seam.
+        if ($percentage > 0 && $percentage < 100) {
+            $sweep = 360 * ($percentage / 100);
+            $this->Circle($centrex, $centrey, $radius, 90 - $sweep, 90, 'D', [
+                'width' => $thickness,
+                'cap' => 'butt',
+                'color' => $this->hex_to_rgb($arccolor),
+            ]);
+        }
+
+        // Percentage in the hole.
+        $this->set_text_from_hex($hasgrade ? self::COLOR_DARK : self::COLOR_MUTED);
         if ($hasgrade) {
-            $this->SetFont('helvetica', 'B', 22);
-            $pcttext = $data['percentage'] . '%';
+            $this->SetFont('helvetica', 'B', 18);
+            $label = round($percentage) . '%';
         } else {
-            $this->SetFont('helvetica', 'B', 11);
-            $pcttext = get_string('feedback_summary_no_grade', 'local_unifiedgrader');
+            $this->SetFont('helvetica', 'B', 9);
+            $label = get_string('feedback_summary_no_grade', 'local_unifiedgrader');
         }
-        $textwidth = $this->GetStringWidth($pcttext);
-        $this->SetXY($centrex - ($textwidth / 2), $y + $radius - 5);
-        $this->Cell($textwidth, 10, $pcttext, 0, 0, 'C');
+        $this->SetXY($x, $centrey - 4.5);
+        $this->Cell($width, 9, $label, 0, 0, 'C');
 
-        // Grade fraction below circle.
-        $belowy = $y + ($radius * 2) + 3;
-        $this->set_text_from_hex(self::COLOR_DARK);
+        // Fraction beneath the ring.
+        $bottom = $centrey + $radius + ($thickness / 2) + 3;
         if ($hasgrade) {
-            $this->SetFont('helvetica', 'B', 13);
-            $gradetext = round($data['gradevalue'], 2) . ' / ' . round($data['maxgrade'], 2);
-            $this->SetXY(self::MARGIN_H, $belowy);
-            $this->Cell($pagewidth - (self::MARGIN_H * 2), 6, $gradetext, 0, 1, 'C');
+            $this->set_text_from_hex(self::COLOR_DARK);
+            $this->SetFont('helvetica', 'B', 12);
+            $this->SetXY($x, $bottom);
+            $this->Cell(
+                $width,
+                6,
+                round($data['gradevalue'], 2) . ' / ' . round($data['maxgrade'], 2),
+                0,
+                0,
+                'C'
+            );
+            $bottom += 6;
         }
 
-        $this->SetY($belowy + 8);
+        $this->SetY($bottom);
     }
 
     /**
@@ -229,48 +409,6 @@ class feedback_summary_pdf extends \pdf {
         $this->SetY($this->GetY() + 3);
     }
 
-    /**
-     * Render the overall feedback section with accent bar.
-     *
-     * @param array $data
-     */
-    private function render_feedback_section(array $data): void {
-        $feedback = trim($data['feedback'] ?? '');
-        if ($feedback === '') {
-            return;
-        }
-
-        $pagewidth = $this->getPageWidth();
-        $contentwidth = $pagewidth - (self::MARGIN_H * 2);
-
-        $this->render_section_heading(
-            get_string('feedback_summary_overall_feedback', 'local_unifiedgrader')
-        );
-
-        // Flatten filter_nida markup to the translated content only (the badge
-        // and hidden original are web chrome), then sanitise for TCPDF.
-        $feedback = $this->sanitise_feedback_html(pdf_text::flatten($feedback));
-
-        // Wrap in styled container.
-        $html = '<div style="font-size: 9pt; color: #212529; line-height: 1.5;">'
-            . $feedback
-            . '</div>';
-
-        $this->writeHTMLCell(
-            $contentwidth - 6,
-            0,
-            self::MARGIN_H + 6,
-            $this->GetY(),
-            $html,
-            0,
-            1,
-            false,
-            true,
-            'L'
-        );
-
-        $this->SetY($this->GetY() + 4);
-    }
 
     /**
      * Render the rubric or marking guide section.
@@ -298,7 +436,11 @@ class feedback_summary_pdf extends \pdf {
         $contentwidth = $pagewidth - (self::MARGIN_H * 2) - 6;
 
         $this->render_section_heading(
-            get_string('rubric', 'local_unifiedgrader')
+            get_string('rubric', 'local_unifiedgrader'),
+            0xF00A, // Icon: table-cells.
+            null,
+            null,
+            20
         );
 
         $html = '<table cellpadding="4" cellspacing="0" style="font-size: 8pt;">';
@@ -402,7 +544,11 @@ class feedback_summary_pdf extends \pdf {
         $contentwidth = $pagewidth - (self::MARGIN_H * 2) - 6;
 
         $this->render_section_heading(
-            get_string('markingguide', 'local_unifiedgrader')
+            get_string('markingguide', 'local_unifiedgrader'),
+            0xF0AE, // Icon: list-check.
+            null,
+            null,
+            20
         );
 
         $html = '<table cellpadding="4" cellspacing="0" style="font-size: 8pt;">';
@@ -510,7 +656,8 @@ class feedback_summary_pdf extends \pdf {
         $contentwidth = $pagewidth - (self::MARGIN_H * 2);
 
         $this->render_section_heading(
-            get_string('plagiarism', 'local_unifiedgrader')
+            get_string('plagiarism', 'local_unifiedgrader'),
+            0xF3ED // Icon: shield-halved.
         );
 
         $html = '<table cellpadding="3" cellspacing="0" style="font-size: 8pt;">';
@@ -687,37 +834,338 @@ class feedback_summary_pdf extends \pdf {
      * Render a section heading with a blue accent bar.
      *
      * @param string $title
+     * @param int|null $icon Font Awesome codepoint to set beside the title.
+     * @param float|null $x Left edge, for a heading inside a column.
+     * @param float|null $width Heading width; defaults to the content width.
+     * @param float $keepwithnext Height of the block that must stay on the same
+     *                            page as this heading, in mm.
      */
-    private function render_section_heading(string $title): void {
+    private function render_section_heading(
+        string $title,
+        ?int $icon = null,
+        ?float $x = null,
+        ?float $width = null,
+        float $keepwithnext = 0
+    ): void {
+        $x ??= self::MARGIN_H;
+        $width ??= $this->getPageWidth() - (self::MARGIN_H * 2);
+
+        // A heading alone at the foot of a page, with what it introduces on the
+        // next, reads as a mistake. Callers say how much of what follows has to
+        // travel with it.
+        $this->ensure_space(8 + $keepwithnext);
+
         $y = $this->GetY();
 
         // Blue accent bar.
         $this->set_fill_from_hex(self::COLOR_PRIMARY);
-        $this->Rect(self::MARGIN_H, $y, 1.5, 6, 'F');
+        $this->Rect($x, $y, 1.5, 6, 'F');
+
+        $textx = $x + 5;
+
+        // Section mark, in the accent colour, matching the icon the same section
+        // carries on screen so the PDF reads as the page it came from.
+        $iconfont = $icon !== null ? $this->icon_font() : null;
+        if ($iconfont) {
+            $this->set_text_from_hex(self::COLOR_PRIMARY);
+            $this->SetFont($iconfont, '', 9);
+            $this->SetXY($textx, $y + 0.4);
+            $this->Cell(5, 6, \mb_chr($icon, 'UTF-8'), 0, 0, 'L');
+            $textx += 6;
+        }
 
         // Heading text.
         $this->set_text_from_hex(self::COLOR_DARK);
         $this->SetFont('helvetica', 'B', 11);
-        $this->SetXY(self::MARGIN_H + 5, $y);
-        $this->Cell(100, 6, $title, 0, 1, 'L');
+        $this->SetXY($textx, $y);
+        $this->Cell($width - ($textx - $x), 6, $title, 0, 1, 'L');
         $this->SetY($this->GetY() + 2);
     }
 
     /**
-     * Render the footer line.
+     * Font Awesome glyphs for the engagement metrics, keyed as the tiles are.
+     *
+     * Codepoints from the Solid set Moodle bundles, so the PDF shows the same
+     * marks as the Activity Points card on screen rather than a second visual
+     * vocabulary a student would have to learn twice.
+     *
+     * @var array<string, int>
+     */
+    private const METRIC_ICONS = [
+        'chats' => 0xF086, // Icon: comments.
+        'talks' => 0xF130, // Icon: microphone.
+        'raisehand' => 0xF0A6, // Icon: hand-point-up.
+        'pollvotes' => 0xF681, // Icon: square-poll-vertical.
+        'emojis' => 0xF118, // Icon: face-smile.
+        'duration' => 0xF017, // Icon: clock.
+    ];
+
+    /** @var array Footer content, kept for TCPDF's per-page Footer() callback. */
+    private array $footerdata = [];
+
+    /** @var string|null Registered icon font family, or null when unavailable. */
+    private ?string $iconfont = null;
+
+    /** @var bool Whether icon font resolution has been attempted. */
+    private bool $iconfontresolved = false;
+
+    /**
+     * Register Moodle's bundled Font Awesome with TCPDF, once per document.
+     *
+     * TCPDF cannot read the WOFF2 the browser gets, but core also ships the
+     * TrueType original, which TCPDF converts into its own font definition. The
+     * conversion is slow enough to be worth keeping, so the result is written to
+     * the local cache and reused; a student downloading feedback pays for it
+     * only the first time after a cache purge.
+     *
+     * Every failure path returns null and the tiles render without icons. A
+     * missing font is a cosmetic loss, and must never be the reason a student
+     * cannot download their feedback.
+     *
+     * @return string|null The TCPDF font family name.
+     */
+    private function icon_font(): ?string {
+        global $CFG;
+
+        if ($this->iconfontresolved) {
+            return $this->iconfont;
+        }
+        $this->iconfontresolved = true;
+
+        $ttf = $CFG->libdir . '/fonts/fa-solid-900.ttf';
+        if (!is_readable($ttf)) {
+            return null;
+        }
+
+        try {
+            $outpath = \make_localcache_directory('local_unifiedgrader/tcpdffonts') . '/';
+            $fontname = \TCPDF_FONTS::addTTFfont($ttf, 'TrueTypeUnicode', '', 32, $outpath);
+            if (empty($fontname) || !is_readable($outpath . $fontname . '.php')) {
+                return null;
+            }
+            $this->AddFont($fontname, '', $outpath . $fontname . '.php');
+            $this->iconfont = $fontname;
+        } catch (\Throwable $e) {
+            // Conversion can fail on an unwritable cache or a font TCPDF will
+            // not parse. Neither is worth failing the download over.
+            debugging(
+                'local_unifiedgrader: could not register the icon font for the feedback PDF: '
+                    . $e->getMessage(),
+                DEBUG_DEVELOPER
+            );
+            $this->iconfont = null;
+        }
+
+        return $this->iconfont;
+    }
+
+    /**
+     * Render the engagement figures as a row of dashboard tiles.
+     *
+     * Drawn rather than written as HTML: TCPDF lays out a Bootstrap grid as a
+     * vertical list of numbers, which is what this replaces. Every metric is
+     * shown even at zero, so two students' summaries can be read side by side
+     * and a zero is visibly a zero rather than a missing tile.
      *
      * @param array $data
      */
-    private function render_footer(array $data): void {
-        // Disable auto page break so footer doesn't trigger new pages.
-        $this->SetAutoPageBreak(false, 0);
+    private function render_analytics_widgets(array $data): void {
+        $analytics = $data['analytics'] ?? [];
+        if (empty($analytics['hasengagement'])) {
+            return;
+        }
+
+        // The totals row travels with the heading: a lone "Activity Points" at
+        // the foot of a page says nothing on its own.
+        $this->render_section_heading(
+            get_string('bbb_activitypoints_heading', 'local_unifiedgrader'),
+            0xE0E3, // Icon: chart-column.
+            null,
+            null,
+            $this->icon_font() ? 32 : 27
+        );
+
+        $totals = $analytics['totals'] ?? [];
+        $sessioncount = (int) ($analytics['sessioncount'] ?? 0);
+        $this->render_metric_row(
+            get_string('feedback_summary_sessions_total', 'local_unifiedgrader', $sessioncount),
+            $totals,
+            true
+        );
+
+        // Per-session rows, when there is more than one session to separate.
+        foreach ($analytics['sessions'] ?? [] as $session) {
+            $label = get_string('bbb_session_label_prefix', 'local_unifiedgrader')
+                . ' ' . ($session['sessionlabel'] ?? '');
+            $this->render_metric_row($label, $session, false);
+        }
+
+        $this->SetY($this->GetY() + 3);
+    }
+
+    /**
+     * Draw one labelled row of metric tiles.
+     *
+     * @param string $label Row caption, e.g. the session date.
+     * @param array $metrics Carries chats, talks, raisehand, pollvotes, emojis
+     *                       and durationformatted.
+     * @param bool $emphasis Whether to draw the row as the headline totals.
+     */
+    private function render_metric_row(string $label, array $metrics, bool $emphasis): void {
+        $pagewidth = $this->getPageWidth();
+        $contentwidth = $pagewidth - (self::MARGIN_H * 2);
+
+        $tiles = [
+            ['chats', (string) ($metrics['chats'] ?? 0),
+                get_string('bbb_metric_chats', 'local_unifiedgrader')],
+            ['talks', (string) ($metrics['talks'] ?? 0),
+                get_string('bbb_metric_talks', 'local_unifiedgrader')],
+            ['raisehand', (string) ($metrics['raisehand'] ?? 0),
+                get_string('bbb_metric_raisehand', 'local_unifiedgrader')],
+            ['pollvotes', (string) ($metrics['pollvotes'] ?? 0),
+                get_string('bbb_metric_pollvotes', 'local_unifiedgrader')],
+            ['emojis', (string) ($metrics['emojis'] ?? 0),
+                get_string('bbb_metric_emojis', 'local_unifiedgrader')],
+            ['duration', (string) ($metrics['durationformatted'] ?? '0m'),
+                get_string('bbb_metric_duration', 'local_unifiedgrader')],
+        ];
+
+        $iconfont = $this->icon_font();
+        // Without the icon font the tile keeps its old proportions rather than
+        // reserving a band of empty space for a mark that is not coming.
+        $tileheight = $emphasis ? ($iconfont ? 24 : 19) : ($iconfont ? 20 : 15);
+        $gap = 2;
+        $tilewidth = ($contentwidth - ($gap * (count($tiles) - 1))) / count($tiles);
+
+        // Keep a row whole: break to a new page rather than split label from tiles.
+        $this->ensure_space($tileheight + 8);
+
+        // Row caption. The totals row is titled in the same blue that fills its
+        // tiles, so the eye pairs the two before reading either.
+        $this->SetFont('helvetica', 'B', $emphasis ? 8.5 : 8);
+        $this->set_text_from_hex($emphasis ? self::COLOR_PRIMARY : self::COLOR_MUTED);
+        $this->SetXY(self::MARGIN_H, $this->GetY());
+        $this->Cell($contentwidth, 4, $label, 0, 1, 'L');
+
+        // The totals read as solid blue tiles and each session as a quiet
+        // outlined one, so the summary and its parts are told apart at a glance
+        // rather than by reading the captions. Same six metrics either way: the
+        // rows stay comparable column by column.
+        $y = $this->GetY() + 1;
+        $x = self::MARGIN_H;
+        foreach ($tiles as [$key, $value, $caption]) {
+            if ($emphasis) {
+                $this->set_fill_from_hex(self::COLOR_PRIMARY);
+                $this->RoundedRect($x, $y, $tilewidth, $tileheight, self::RADIUS, '1111', 'F');
+            } else {
+                $this->set_fill_from_hex(self::COLOR_WHITE);
+                $this->set_draw_from_hex(self::COLOR_BORDER);
+                $this->SetLineWidth(0.2);
+                $this->RoundedRect($x, $y, $tilewidth, $tileheight, self::RADIUS, '1111', 'DF');
+            }
+
+            // Icon, above the figure. Drawn in the caption's colour rather than
+            // the value's so it reads as part of the label, not as data.
+            $valuetop = $y + ($emphasis ? 3.5 : 2.5);
+            if ($iconfont && isset(self::METRIC_ICONS[$key])) {
+                $this->set_text_from_hex($emphasis ? self::COLOR_PRIMARY_TINT : self::COLOR_MUTED);
+                $this->SetFont($iconfont, '', $emphasis ? 9 : 7.5);
+                $this->SetXY($x, $y + 2);
+                $this->Cell($tilewidth, 5, \mb_chr(self::METRIC_ICONS[$key], 'UTF-8'), 0, 0, 'C');
+                $valuetop = $y + ($emphasis ? 7.5 : 6);
+            }
+
+            // Value.
+            $this->set_text_from_hex($emphasis ? self::COLOR_WHITE : self::COLOR_DARK);
+            $this->SetFont('helvetica', 'B', $emphasis ? 15 : 11.5);
+            $this->SetXY($x, $valuetop);
+            $this->Cell($tilewidth, $emphasis ? 8 : 6, $value, 0, 0, 'C');
+
+            // Caption.
+            $this->set_text_from_hex($emphasis ? self::COLOR_PRIMARY_TINT : self::COLOR_MUTED);
+            $this->SetFont('helvetica', '', 6.5);
+            $this->SetXY($x, $y + $tileheight - 5.5);
+            $this->Cell($tilewidth, 4, $caption, 0, 0, 'C');
+
+            $x += $tilewidth + $gap;
+        }
+
+        $this->SetY($y + $tileheight + ($emphasis ? 4 : 2.5));
+    }
+
+    /**
+     * Render timestamped recording comments as a readable list.
+     *
+     * @param array $data
+     */
+    private function render_annotation_comments(array $data): void {
+        $this->SetAutoPageBreak(true, 15);
+        $this->AddPage('P', 'A4');
 
         $pagewidth = $this->getPageWidth();
-        $pageheight = $this->getPageHeight();
-        $y = $pageheight - 12;
+        $contentwidth = $pagewidth - (self::MARGIN_H * 2);
+
+        $this->render_section_heading(
+            get_string('feedback_summary_recording_comments', 'local_unifiedgrader'),
+            0xF008 // Icon: film.
+        );
+
+        $rows = '';
+        $lastsession = null;
+        foreach ($data['annotations'] as $annotation) {
+            $sessionlabel = (string) ($annotation['sessionlabel'] ?? '');
+            // Group under a session heading, but only once the comments actually
+            // span more than one recording.
+            if ($sessionlabel !== '' && $sessionlabel !== $lastsession) {
+                if ($lastsession !== null) {
+                    $rows .= '<tr><td colspan="2" style="height: 4mm;"></td></tr>';
+                }
+                $rows .= '<tr><td colspan="2" style="font-size: 8pt; color: #6C757D;"><b>'
+                    . htmlspecialchars($sessionlabel) . '</b></td></tr>';
+                $lastsession = $sessionlabel;
+            }
+            $rows .= '<tr>'
+                . '<td width="15%" style="font-size: 9pt; color: #0D6EFD;"><b>'
+                . htmlspecialchars((string) $annotation['timestamp']) . '</b></td>'
+                . '<td width="85%" style="font-size: 9pt; color: #212529;">'
+                . nl2br(htmlspecialchars((string) $annotation['text'])) . '</td>'
+                . '</tr>'
+                . '<tr><td colspan="2" style="height: 2mm;"></td></tr>';
+        }
+
+        $this->writeHTMLCell(
+            $contentwidth,
+            0,
+            self::MARGIN_H,
+            $this->GetY(),
+            '<table cellpadding="2">' . $rows . '</table>',
+            0,
+            1,
+            false,
+            true,
+            'L'
+        );
+    }
+
+    /**
+     * Draw the footer on every page.
+     *
+     * Called by TCPDF for each page as it closes, so it covers the annotation
+     * pages the summary adds after itself as well as the summary page, and the
+     * pages TCPDF adds by itself when long feedback overflows.
+     *
+     * The capitalised name is TCPDF's, not ours: this overrides a parent method
+     * and renaming it would simply stop it being called. Hence the blanket sniff
+     * exemption on the declaration.
+     */
+    // phpcs:ignore
+    public function Footer(): void {
+        $pagewidth = $this->getPageWidth();
+        $y = $this->getPageHeight() - 12;
 
         // Thin separator line.
-        $this->set_draw_from_hex(0xDEE2E6);
+        $this->set_draw_from_hex(self::COLOR_BORDER);
+        $this->SetLineWidth(0.2);
         $this->Line(self::MARGIN_H, $y, $pagewidth - self::MARGIN_H, $y);
 
         $y += 2;
@@ -725,23 +1173,34 @@ class feedback_summary_pdf extends \pdf {
         $this->set_text_from_hex(self::COLOR_MUTED);
 
         // Graded date (left).
-        if (!empty($data['dategraded'])) {
+        if (!empty($this->footerdata['dategraded'])) {
             $this->SetXY(self::MARGIN_H, $y);
-            $gradedonstr = get_string(
+            $this->Cell(70, 4, get_string(
                 'feedback_summary_graded_on',
                 'local_unifiedgrader',
-                $data['dategraded']
-            );
-            $this->Cell(80, 4, $gradedonstr, 0, 0, 'L');
+                $this->footerdata['dategraded']
+            ), 0, 0, 'L');
         }
+
+        // Page number (centre). getAliasNbPages() returns a placeholder that
+        // TCPDF substitutes when the document is closed, which is the only
+        // point at which the total is known.
+        $this->SetXY(self::MARGIN_H, $y);
+        $this->Cell($pagewidth - (self::MARGIN_H * 2), 4, get_string(
+            'feedback_summary_page_of',
+            'local_unifiedgrader',
+            (object) [
+                'page' => $this->getAliasNumPage(),
+                'total' => $this->getAliasNbPages(),
+            ]
+        ), 0, 0, 'C');
 
         // Generated by (right).
         $this->SetXY($pagewidth - self::MARGIN_H - 60, $y);
-        $generatedbystr = get_string(
+        $this->Cell(60, 4, get_string(
             'feedback_summary_generated_by',
             'local_unifiedgrader'
-        );
-        $this->Cell(60, 4, $generatedbystr, 0, 0, 'R');
+        ), 0, 0, 'R');
     }
 
     /**
@@ -785,6 +1244,33 @@ class feedback_summary_pdf extends \pdf {
      * Set fill colour from a hex integer.
      *
      * @param int $hex e.g. 0x0D6EFD
+     */
+    /**
+     * Break to a new page unless $needed mm remain above the footer.
+     *
+     * @param float $needed Height the next block needs, in mm.
+     */
+    private function ensure_space(float $needed): void {
+        $limit = $this->getPageHeight() - $this->getBreakMargin();
+        if (($this->GetY() + $needed) > $limit) {
+            $this->AddPage('P', 'A4');
+        }
+    }
+
+    /**
+     * Split a packed hex colour into the [R, G, B] triple TCPDF's style arrays want.
+     *
+     * @param int $hex
+     * @return int[]
+     */
+    private function hex_to_rgb(int $hex): array {
+        return [($hex >> 16) & 0xFF, ($hex >> 8) & 0xFF, $hex & 0xFF];
+    }
+
+    /**
+     * Set the fill colour from a packed hex value.
+     *
+     * @param int $hex
      */
     private function set_fill_from_hex(int $hex): void {
         $this->SetFillColor(($hex >> 16) & 0xFF, ($hex >> 8) & 0xFF, $hex & 0xFF);

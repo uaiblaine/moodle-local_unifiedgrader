@@ -78,7 +78,11 @@ class assign_adapter extends base_adapter {
 
         return [
             'id' => (int) $this->cm->id,
-            'name' => format_string($instance->name),
+            // Plain text, not HTML: this value is rendered through an escaping sink
+            // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+            // more. Letting format_string() escape as well is what turned a course
+            // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+            'name' => format_string($instance->name, true, ['escape' => false]),
             'type' => 'assign',
             'duedate' => (int) $instance->duedate,
             'cutoffdate' => (int) $instance->cutoffdate,

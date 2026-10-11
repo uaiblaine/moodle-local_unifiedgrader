@@ -162,7 +162,7 @@
             {{/hasattempt}}
         </div>
 
-        {{! Right column: Feedback }}
+        {{! Right column: feedback, then the rubric or marking guide the grade came from }}
         {{#showrightcolumn}}
             <div class="col-lg-5">
                 {{#hasfeedback}}
@@ -178,6 +178,93 @@
                         </div>
                     </div>
                 {{/hasfeedback}}
+
+                {{! Rubric display (read-only) }}
+                {{#hasrubric}}
+                    <div class="card mb-3">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">
+                                <i class="fa fa-th me-1" aria-hidden="true"></i>
+                                {{gradingmethodname}}
+                            </h6>
+                            <span class="badge bg-primary text-white">{{rubrictotal}} pts</span>
+                        </div>
+                        <div class="card-body p-0">
+                            {{#rubriccriteria}}
+                                <div class="border-bottom p-3">
+                                    <div class="fw-bold small mb-2">{{{description}}}</div>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        {{#levels}}
+                                            <div class="p-2 border rounded small flex-fill
+                                                {{#selected}} bg-primary bg-opacity-10 border-primary {{/selected}}
+                                                {{^selected}} bg-light text-muted {{/selected}}"
+                                                 style="min-width: 80px;">
+                                                <div class="fw-bold {{#selected}}text-primary{{/selected}}">
+                                                    {{score}} pts
+                                                </div>
+                                                <div style="font-size: 0.75rem;">{{{definition}}}</div>
+                                            </div>
+                                        {{/levels}}
+                                    </div>
+                                    {{#hasselection}}
+                                        <div class="small text-end mt-1 text-primary fw-bold">
+                                            {{selectedscore}} pts
+                                        </div>
+                                    {{/hasselection}}
+                                    {{#hasremark}}
+                                        <div class="mt-2 p-2 rounded small"
+                                             style="background-color: rgba(13, 202, 240, 0.1); border: 1px solid rgba(13, 202, 240, 0.3);">
+                                            <div class="fw-semibold text-info mb-1" style="font-size: 0.7rem;">
+                                                <i class="fa fa-comment me-1" aria-hidden="true"></i>
+                                                {{#str}} teacher_remark, local_unifiedgrader {{/str}}
+                                            </div>
+                                            <div>{{{remark}}}</div>
+                                        </div>
+                                    {{/hasremark}}
+                                </div>
+                            {{/rubriccriteria}}
+                        </div>
+                    </div>
+                {{/hasrubric}}
+
+                {{! Marking guide display (read-only) }}
+                {{#hasguide}}
+                    <div class="card mb-3">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">
+                                <i class="fa fa-list-ol me-1" aria-hidden="true"></i>
+                                {{gradingmethodname}}
+                            </h6>
+                            <span class="badge bg-primary text-white">{{guidetotal}} / {{guidemaxtotal}}</span>
+                        </div>
+                        <div class="card-body p-0">
+                            {{#guidecriteria}}
+                                <div class="border-bottom p-3">
+                                    <div class="d-flex justify-content-between align-items-start mb-1">
+                                        <div class="fw-bold small">{{shortname}}</div>
+                                        <span class="badge {{#hasscore}}bg-primary text-white{{/hasscore}}{{^hasscore}}bg-secondary text-dark{{/hasscore}}">
+                                            {{#hasscore}}{{score}}{{/hasscore}}{{^hasscore}}&ndash;{{/hasscore}}
+                                            / {{maxscore}}
+                                        </span>
+                                    </div>
+                                    {{#description}}
+                                        <div class="small text-muted mb-1">{{{description}}}</div>
+                                    {{/description}}
+                                    {{#hasremark}}
+                                        <div class="mt-2 p-2 rounded small"
+                                             style="background-color: rgba(13, 202, 240, 0.1); border: 1px solid rgba(13, 202, 240, 0.3);">
+                                            <div class="fw-semibold text-info mb-1" style="font-size: 0.7rem;">
+                                                <i class="fa fa-comment me-1" aria-hidden="true"></i>
+                                                {{#str}} teacher_remark, local_unifiedgrader {{/str}}
+                                            </div>
+                                            <div>{{{remark}}}</div>
+                                        </div>
+                                    {{/hasremark}}
+                                </div>
+                            {{/guidecriteria}}
+                        </div>
+                    </div>
+                {{/hasguide}}
             </div>
         {{/showrightcolumn}}
     </div>

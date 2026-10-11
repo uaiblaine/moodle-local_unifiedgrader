@@ -154,7 +154,11 @@ class forum_context_builder {
 
             $result[] = [
                 'id' => (int) $discussion->id,
-                'name' => format_string($discussion->name),
+                // Plain text, not HTML: this value is rendered through an escaping sink
+                // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+                // more. Letting format_string() escape as well is what turned a course
+                // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+                'name' => format_string($discussion->name, true, ['escape' => false]),
                 'posts' => $rendered,
             ];
         }
@@ -298,7 +302,7 @@ class forum_context_builder {
             'parent' => (int) $post->parent,
             'depth' => $depth,
             'discussionid' => (int) $post->discussion,
-            'subject' => format_string($post->subject),
+            'subject' => format_string($post->subject, true, ['escape' => false]),
             'message' => $formatted,
             'authorname' => $authorname,
             'authorpicture' => $authorpicture,

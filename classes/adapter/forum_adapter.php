@@ -197,7 +197,11 @@ class forum_adapter extends base_adapter {
 
         return [
             'id' => (int) $this->cm->id,
-            'name' => format_string($this->forum->get_name()),
+            // Plain text, not HTML: this value is rendered through an escaping sink
+            // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+            // more. Letting format_string() escape as well is what turned a course
+            // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+            'name' => format_string($this->forum->get_name(), true, ['escape' => false]),
             'type' => 'forum',
             'duedate' => (int) $this->forum->get_due_date(),
             'cutoffdate' => (int) $this->forum->get_cutoff_date(),
@@ -488,8 +492,8 @@ class forum_adapter extends base_adapter {
             $result[] = [
                 'postid' => (int) $post->id,
                 'discussionid' => (int) $post->discussionid,
-                'discussionname' => format_string($post->discussionname),
-                'subject' => format_string($post->subject),
+                'discussionname' => format_string($post->discussionname, true, ['escape' => false]),
+                'subject' => format_string($post->subject, true, ['escape' => false]),
                 'created' => (int) $post->created,
                 'createddisplay' => userdate($post->created),
                 'own' => $state['own'] ?? null,
@@ -1665,8 +1669,8 @@ class forum_adapter extends base_adapter {
         $replacements = [
             '{studentname}' => rawurlencode($studentname),
             '{coursecode}' => rawurlencode($coursecode),
-            '{coursename}' => rawurlencode(format_string($this->course->fullname)),
-            '{activityname}' => rawurlencode(format_string($this->forum->get_name())),
+            '{coursename}' => rawurlencode(format_string($this->course->fullname, true, ['escape' => false])),
+            '{activityname}' => rawurlencode(format_string($this->forum->get_name(), true, ['escape' => false])),
             '{activitytype}' => rawurlencode('forum'),
             '{studentid}' => rawurlencode((string) $userid),
             '{gradername}' => rawurlencode(fullname($USER)),

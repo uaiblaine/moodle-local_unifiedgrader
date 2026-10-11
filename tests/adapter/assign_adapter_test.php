@@ -1144,4 +1144,36 @@ final class assign_adapter_test extends \advanced_testcase {
         $latest = $s->adapter->prepare_feedback_draft($studentid, $draftitemid, -1);
         $this->assertStringContainsString('Attempt two feedback', $latest['feedbackhtml']);
     }
+
+    /**
+     * An activity name containing an ampersand comes back as plain text.
+     *
+     * Every sink this value reaches escapes it — Mustache's {{ }} in the header,
+     * textContent in the marking panel, encodeURIComponent in the report-form
+     * URL — so escaping it here as well is what put a literal "&amp;" on screen.
+     */
+    public function test_activity_name_is_not_html_escaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief & Loss Counselling']]);
+        $info = $s->adapter->get_activity_info();
+
+        $this->assertSame('Grief & Loss Counselling', $info['name']);
+        $this->assertStringNotContainsString('&amp;', $info['name']);
+    }
+
+    /**
+     * Turning escaping off does not let markup through: format_string() strips
+     * tags whatever the escape option says, so the unescaped name is still safe
+     * to hand to a sink that will escape it once.
+     */
+    public function test_activity_name_still_strips_markup_when_unescaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief <script>alert(1)</script> Loss']]);
+        $info = $s->adapter->get_activity_info();
+
+        $this->assertStringNotContainsString('<script>', $info['name']);
+        $this->assertStringNotContainsString('</script>', $info['name']);
+    }
 }

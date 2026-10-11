@@ -103,7 +103,11 @@ class quiz_adapter extends base_adapter {
 
         return [
             'id' => (int) $this->cm->id,
-            'name' => format_string($this->quiz->name),
+            // Plain text, not HTML: this value is rendered through an escaping sink
+            // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+            // more. Letting format_string() escape as well is what turned a course
+            // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+            'name' => format_string($this->quiz->name, true, ['escape' => false]),
             'type' => 'quiz',
             'duedate' => $duedate,
             'cutoffdate' => (int) ($this->quiz->timeclose ?? 0),
@@ -1373,7 +1377,7 @@ class quiz_adapter extends base_adapter {
             $criteria[] = [
                 'id' => (int) $slot,
                 'shortname' => 'Q' . $questionnum . ': ' . \core_text::substr(
-                    format_string($questionname),
+                    format_string($questionname, true, ['escape' => false]),
                     0,
                     60
                 ),

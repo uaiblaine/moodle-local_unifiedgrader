@@ -108,20 +108,44 @@ if ($cm->modname === 'quiz') {
         $submissiondata = $adapter->get_submission_data($userid);
     }
     $additionalcontent = $submissiondata['content'] ?? '';
-} else if ($cm->modname === 'forum' || $cm->modname === 'bigbluebuttonbn') {
+} else if ($cm->modname === 'forum') {
     $submissiondata = $adapter->get_submission_data($userid);
     $additionalcontent = $submissiondata['content'] ?? '';
 }
 
+// BigBlueButton contributes data rather than rendered HTML. The grading pane's
+// markup is built around a video player and a session switcher, neither of which
+// survives a PDF: TCPDF cannot play a recording, and it ignores the `d-none`
+// that hides the sessions the switcher is not showing, so every session's tiles
+// rendered at once as an unstyled column of numbers. The summary draws its own
+// tiles from these figures and lists the annotations as timestamped text.
+$analytics = [];
+$annotations = [];
+if ($cm->modname === 'bigbluebuttonbn') {
+    $report = $adapter->get_feedback_report($userid);
+    $analytics = [
+        'hasengagement' => $report['hasengagement'],
+        'sessioncount' => $report['sessioncount'],
+        'totals' => $report['totals'],
+        'sessions' => $report['sessions'],
+    ];
+    $annotations = $report['annotations'];
+}
+
 // Build the summary data array.
 $studentname = fullname(\core_user::get_user($userid));
+// The string strftimedatefull is not a core one — asking for it put a literal
+// "[[strftimedatefull]]" in the PDF footer where the date should be.
 $dategraded = !empty($gradedata['timegraded'])
-    ? userdate($gradedata['timegraded'], get_string('strftimedatefull'))
+    ? userdate($gradedata['timegraded'], get_string('strftimedaydatetime', 'langconfig'))
     : '';
 
 $summarydata = [
-    'activityname' => format_string($activityinfo['name']),
-    'coursename' => format_string($course->fullname),
+    // The adapter has already formatted the activity name; formatting it a
+    // second time would escape it twice over. TCPDF writes both of these as
+    // literal text, so neither may arrive HTML-escaped.
+    'activityname' => $activityinfo['name'],
+    'coursename' => format_string($course->fullname, true, ['escape' => false]),
     'studentname' => $studentname,
     'gradevalue' => $gradeinfo['gradevalue'],
     'maxgrade' => $gradeinfo['maxgrade'],
@@ -139,6 +163,11 @@ $summarydata = [
         'forum' => get_string('forum_your_posts', 'local_unifiedgrader'),
         default => '',
     },
+    'analytics' => $analytics,
+    'annotations' => $annotations,
+    // Null on a site that has configured no logo — the header then renders
+    // without one rather than failing.
+    'logopath' => feedback_data_helper::resolve_site_logo_path(),
 ];
 
 // Generate the summary PDF.

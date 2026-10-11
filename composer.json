@@ -1,0 +1,25 @@
+{
+    "name": "mkpelletier/moodle-local_unifiedgrader",
+    "description": "Unified Grader for Moodle — a single grading interface across assignments, forums, quizzes and BigBlueButton sessions.",
+    "type": "project",
+    "license": "GPL-3.0-or-later",
+    "require-dev": {
+        "moodlehq/moodle-cs": "^3.7"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        },
+        "sort-packages": true
+    },
+    "scripts": {
+        "cs": "phpcs --standard=moodle --extensions=php --ignore=vendor/ .",
+        "cs-fix": "phpcbf --standard=moodle --extensions=php --ignore=vendor/ .",
+        "cs-summary": "phpcs --standard=moodle --extensions=php --ignore=vendor/ --report=summary ."
+    },
+    "scripts-descriptions": {
+        "cs": "Run the Moodle coding standard over the plugin (same ruleset as CI's Code Checker).",
+        "cs-fix": "Apply the automatically fixable coding-standard corrections.",
+        "cs-summary": "One line per file with findings, instead of the full report."
+    }
+}

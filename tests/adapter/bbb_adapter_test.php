@@ -191,9 +191,10 @@ final class bbb_adapter_test extends \advanced_testcase {
      * @param string $url The playback URL that becomes activerecordingurl when selected.
      * @param string $label The session label shown on the pill.
      * @param int $id The Moodle recording entity id.
+     * @param int $groupid The group the meeting ran for (0 = ungrouped).
      * @return array
      */
-    private function fake_recording(string $ref, string $url, string $label, int $id): array {
+    private function fake_recording(string $ref, string $url, string $label, int $id, int $groupid = 0): array {
         return [
             'recordingid' => $id,
             'bbbrecordingid' => $ref,
@@ -203,7 +204,7 @@ final class bbb_adapter_test extends \advanced_testcase {
             'hasstatisticsurl' => false,
             'starttime' => 1000,
             'endtime' => 2000,
-            'groupid' => 0,
+            'groupid' => $groupid,
             'sessionlabel' => $label,
         ];
     }
@@ -962,5 +963,363 @@ final class bbb_adapter_test extends \advanced_testcase {
         $this->assert_pill_active($content, 'data-recordingref', 'rec-late', true);
         $this->assert_pill_active($content, 'data-recordingref', 'rec-early', false);
         $this->assertStringContainsString('src="https://bbb.example.com/play/late"', $content);
+    }
+
+    /**
+     * Build a separate-groups scenario with two groups and the target student
+     * placed in the first of them.
+     *
+     * @param int $groupmode Activity group mode, so the visible-groups case can
+     *                       reuse the same setup.
+     * @return object{scenario: \stdClass, target: \stdClass, other: \stdClass,
+     *                groupa: int, groupb: int}
+     */
+    private function create_separate_groups_scenario(int $groupmode = SEPARATEGROUPS): object {
+        $s = $this->create_scenario(['modparams' => ['groupmode' => $groupmode]]);
+        $gen = $this->getDataGenerator();
+        $target = $s->scenario->students[0];
+        $other = $s->scenario->students[1];
+
+        $groupa = $gen->create_group(['courseid' => $s->scenario->course->id]);
+        $groupb = $gen->create_group(['courseid' => $s->scenario->course->id]);
+        $gen->create_group_member(['groupid' => $groupa->id, 'userid' => $target->id]);
+        $gen->create_group_member(['groupid' => $groupb->id, 'userid' => $other->id]);
+
+        return (object) [
+            'scenario' => $s->scenario,
+            'target' => $target,
+            'other' => $other,
+            'groupa' => (int) $groupa->id,
+            'groupb' => (int) $groupb->id,
+        ];
+    }
+
+    /**
+     * Separate groups: a session that ran for another group is not this
+     * student's to be marked on, whatever the attendance data says.
+     *
+     * The reported case — one BBB activity carrying a session per group, with
+     * every group's recording offered to every student.
+     */
+    public function test_separate_groups_hides_other_groups_sessions(): void {
+        $this->resetAfterTest();
+
+        $g = $this->create_separate_groups_scenario();
+        $adapter = $this->adapter_with_recordings($g->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1, $g->groupa),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2, $g->groupb),
+        ]);
+        $content = $adapter->get_submission_data($g->target->id)['content'];
+
+        $this->assertStringContainsString('play/alpha', $content);
+        $this->assertStringNotContainsString('play/bravo', $content);
+        // The list was narrowed, so no "Showing every session" notice may appear.
+        $this->assertStringNotContainsString('Showing every session', $content);
+    }
+
+    /**
+     * Separate groups: the group pass narrows the list even when the attendance
+     * ids never reconcile.
+     *
+     * This is why it exists. Where BBB's summary `recordid` does not correspond
+     * to any recording id, the attendance filter can only stand down — and on a
+     * site whose other sessions have no roster either, guard 1 kept every one of
+     * them, so a student who attended one group's session was offered all of
+     * them with nothing on screen to explain it.
+     */
+    public function test_group_filter_narrows_when_attendance_ids_never_reconcile(): void {
+        $this->resetAfterTest();
+
+        $g = $this->create_separate_groups_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        // Attendance recorded under an id matching no recording — the shape that
+        // defeats the attendance filter entirely.
+        $gen->create_bbb_summary_log($g->scenario->activity, $g->target->id, [], 1800, null, 'internal-meeting-xyz');
+
+        $adapter = $this->adapter_with_recordings($g->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1, $g->groupa),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2, $g->groupb),
+        ]);
+        $content = $adapter->get_submission_data($g->target->id)['content'];
+
+        $this->assertStringContainsString('play/alpha', $content);
+        $this->assertStringNotContainsString('play/bravo', $content);
+    }
+
+    /**
+     * Separate groups: an ungrouped session ran for everybody, so it stays on
+     * offer regardless of which group the student is in.
+     */
+    public function test_separate_groups_keeps_ungrouped_sessions(): void {
+        $this->resetAfterTest();
+
+        $g = $this->create_separate_groups_scenario();
+        $adapter = $this->adapter_with_recordings($g->scenario, [
+            $this->fake_recording('rec-all', 'https://bbb.example.com/play/plenary', 'Plenary', 1, 0),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2, $g->groupb),
+        ]);
+        $content = $adapter->get_submission_data($g->target->id)['content'];
+
+        $this->assertStringContainsString('play/plenary', $content);
+        $this->assertStringNotContainsString('play/bravo', $content);
+    }
+
+    /**
+     * Visible groups: membership says nothing about where a student was, since
+     * they are free to join another group's meeting. Only attendance may filter.
+     */
+    public function test_visible_groups_leaves_sessions_alone(): void {
+        $this->resetAfterTest();
+
+        $g = $this->create_separate_groups_scenario(VISIBLEGROUPS);
+        $adapter = $this->adapter_with_recordings($g->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1, $g->groupa),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2, $g->groupb),
+        ]);
+        $content = $adapter->get_submission_data($g->target->id)['content'];
+
+        $this->assertStringContainsString('play/alpha', $content);
+        $this->assertStringContainsString('play/bravo', $content);
+    }
+
+    /**
+     * A student in no group keeps every session, and is told why.
+     *
+     * Non-membership and missing group data are the same evidence, so the pass
+     * stands down rather than reporting them absent from the whole activity.
+     */
+    public function test_student_in_no_group_keeps_all_sessions_with_notice(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['groupmode' => SEPARATEGROUPS]]);
+        $gen = $this->getDataGenerator();
+        $target = $s->scenario->students[0];
+        $group = $gen->create_group(['courseid' => $s->scenario->course->id]);
+
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1, (int) $group->id),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2, (int) $group->id),
+        ]);
+        $content = $adapter->get_submission_data($target->id)['content'];
+
+        $this->assertStringContainsString('play/alpha', $content);
+        $this->assertStringContainsString('play/bravo', $content);
+        $this->assertStringContainsString('not in any group', $content);
+    }
+
+    /**
+     * Guard 3 must speak up even when guard 1 has already kept everything.
+     *
+     * A student whose attendance matches no recording, on an activity where some
+     * recordings have no roster: guard 1 keeps the unrostered ones, so the list
+     * never empties and the old check for an empty result never fired. The pane
+     * then showed every session with nothing to say why — the exact silence the
+     * guard exists to break.
+     */
+    public function test_unreconcilable_attendance_is_reported_despite_unrostered_sessions(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $target = $s->scenario->students[0];
+        $other = $s->scenario->students[1];
+
+        // Here rec-1 has a roster; rec-2 has none, so guard 1 keeps it.
+        $gen->create_bbb_summary_log($s->scenario->activity, $other->id, [], 1800, null, 'rec-1');
+        // This student attended, under an id matching neither recording.
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, [], 1800, null, 'some-other-id');
+
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2),
+        ]);
+        $content = $adapter->get_submission_data($target->id)['content'];
+
+        $this->assertStringContainsString('play/alpha', $content);
+        $this->assertStringContainsString('play/bravo', $content);
+        $this->assertStringContainsString('does not correspond to any of the recordings', $content);
+    }
+
+    /**
+     * An activity name containing an ampersand comes back as plain text.
+     *
+     * See the assign adapter's counterpart: the name is escaped again by every
+     * sink that renders it, so escaping it here too double-escapes it.
+     */
+    public function test_activity_name_is_not_html_escaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief & Loss']]);
+        $info = $s->adapter->get_activity_info();
+
+        $this->assertSame('Grief & Loss', $info['name']);
+    }
+
+    /**
+     * A recording with no name of its own falls back to the activity's, and that
+     * fallback becomes a switcher pill label rendered through {{sessionlabel}} —
+     * so it too must be plain text.
+     */
+    public function test_session_label_fallback_is_not_html_escaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief & Loss']]);
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            // A starttime of 0 forces the name fallback rather than a formatted date.
+            ['recordingid' => 1, 'bbbrecordingid' => 'rec-1', 'name' => 'Grief & Loss',
+             'playbackurl' => 'https://bbb.example.com/play/alpha', 'statisticsurl' => '',
+             'hasstatisticsurl' => false, 'starttime' => 0, 'endtime' => 0, 'groupid' => 0,
+             'sessionlabel' => 'Grief & Loss'],
+        ]);
+        $content = $adapter->get_submission_data($s->scenario->students[0]->id)['content'];
+
+        $this->assertStringNotContainsString('&amp;amp;', $content);
+    }
+
+    /**
+     * The feedback report carries the student's own sessions, labelled, with
+     * totals across them — the figures the PDF and the student's summary draw.
+     */
+    public function test_feedback_report_totals_and_labels_each_session(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $target = $s->scenario->students[0];
+        $other = $s->scenario->students[1];
+
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 620], 5700, null, 'rec-1');
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 722], 5820, null, 'rec-2');
+        // Another student's session must not reach this student's report.
+        $gen->create_bbb_summary_log($s->scenario->activity, $other->id, ['talks' => 999], 1800, null, 'rec-3');
+
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2),
+        ]);
+        $report = $adapter->get_feedback_report($target->id);
+
+        $this->assertTrue($report['hasengagement']);
+        $this->assertSame(2, $report['sessioncount']);
+        $this->assertSame(1342, $report['totals']['talks'], 'Totals sum the sessions they attended');
+        $this->assertCount(2, $report['sessions']);
+        $this->assertSame('Session A', $report['sessions'][0]['sessionlabel']);
+        $this->assertSame('Session B', $report['sessions'][1]['sessionlabel']);
+        // 620 + 722 only — the other student's 999 is not theirs.
+        $this->assertNotSame(2341, $report['totals']['talks']);
+    }
+
+    /**
+     * One session: the totals row already is that session, so listing it again
+     * underneath would just repeat the same six numbers.
+     */
+    public function test_feedback_report_omits_per_session_rows_for_one_session(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $target = $s->scenario->students[0];
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 12], 1800, null, 'rec-1');
+
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1),
+        ]);
+        $report = $adapter->get_feedback_report($target->id);
+
+        $this->assertSame(1, $report['sessioncount']);
+        $this->assertSame(12, $report['totals']['talks']);
+        $this->assertSame([], $report['sessions']);
+    }
+
+    /**
+     * A student with no attendance gets an empty report rather than an error,
+     * so the PDF simply omits the engagement section.
+     */
+    public function test_feedback_report_is_empty_without_attendance(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $adapter = $this->adapter_with_recordings($s->scenario, []);
+        $report = $adapter->get_feedback_report($s->scenario->students[0]->id);
+
+        $this->assertFalse($report['hasengagement']);
+        $this->assertSame(0, $report['sessioncount']);
+        $this->assertSame([], $report['sessions']);
+        $this->assertFalse($report['hasannotations']);
+    }
+
+    /**
+     * A student reading their own feedback sees every session's figures at once.
+     *
+     * The grader's switcher hides all but the selected session behind `d-none`;
+     * for a finished record that just means the other sessions are unreachable,
+     * since the student is not switching between recordings to mark them.
+     */
+    public function test_own_feedback_view_stacks_every_session(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $target = $s->scenario->students[0];
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 620], 5700, null, 'rec-1');
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 722], 5820, null, 'rec-2');
+
+        $adapter = $this->adapter_with_recordings($s->scenario, [
+            $this->fake_recording('rec-1', 'https://bbb.example.com/play/alpha', 'Session A', 1),
+            $this->fake_recording('rec-2', 'https://bbb.example.com/play/bravo', 'Session B', 2),
+        ]);
+
+        // Matched against the opening <div> rather than the bare attribute: the
+        // switcher's own JavaScript carries that selector as a literal string,
+        // so it is in the markup either way and proves nothing on its own.
+        $switcherpanel = '<div data-region="bbb-tiles-session"';
+        $staticpanel = '<div data-region="bbb-tiles-session-static"';
+
+        // The grader's pane keeps the switcher behaviour.
+        $gradercontent = $adapter->get_submission_data($target->id)['content'];
+        $this->assertStringContainsString($switcherpanel, $gradercontent);
+        $this->assertStringNotContainsString($staticpanel, $gradercontent);
+
+        // The student's own view stacks them instead.
+        $this->setUser($target);
+        $studentcontent = $adapter->get_submission_data($target->id)['content'];
+        $this->assertStringContainsString($staticpanel, $studentcontent);
+        $this->assertStringNotContainsString($switcherpanel, $studentcontent);
+        // Both sessions, not just the one the switcher would have selected.
+        $this->assertSame(2, substr_count($studentcontent, $staticpanel));
+    }
+
+    /**
+     * The marking guide behind a BBB grade reaches the student's feedback view.
+     *
+     * The BBB branch of view_feedback.php built its own template context and
+     * never parsed the grading data, so the student was shown the overall
+     * feedback alone: the per-criterion scores and the teacher's remarks — often
+     * where the substance of the marking sits — reached them only through the
+     * downloadable PDF. This asserts the adapter's grade data parses into the
+     * criteria the feedback template renders.
+     */
+    public function test_grade_data_parses_into_guide_criteria_for_the_student(): void {
+        if (!class_exists('\\bbbext_advgrd\\local\\grader')) {
+            $this->markTestSkipped('bbbext_advgrd not installed');
+        }
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $advgrdgen = $this->getDataGenerator()->get_plugin_generator('bbbext_advgrd');
+        $advgrdgen->create_config((int) $s->scenario->activity->id, ['gradingmethod' => 'guide']);
+        $advgrdgen->import_template((int) $s->scenario->activity->id, 'coi');
+
+        $gradedata = $s->adapter->get_grade_data($s->scenario->students[0]->id);
+        $parsed = \local_unifiedgrader\feedback_data_helper::parse_grading_data(
+            $gradedata,
+            $s->scenario->context,
+        );
+
+        $this->assertTrue($parsed['hasadvancedgrading'], 'The feedback view opens its right column on this');
+        $this->assertTrue($parsed['hasguide']);
+        $this->assertNotEmpty($parsed['guidecriteria']);
+        $this->assertArrayHasKey('shortname', $parsed['guidecriteria'][0]);
+        $this->assertArrayHasKey('maxscore', $parsed['guidecriteria'][0]);
     }
 }

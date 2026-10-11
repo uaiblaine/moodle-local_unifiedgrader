@@ -191,19 +191,11 @@ if ($cm->modname === 'forum') {
         'annotatedpdfmapjson' => json_encode($annotatedpdfmap),
         'feedbackdownloadurl' => $feedbackdownloadurl,
         'userid' => $userid,
-        'hasrubric' => $gradinginfo['hasrubric'],
-        'rubriccriteria' => $gradinginfo['rubriccriteria'],
-        'rubrictotal' => $gradinginfo['rubrictotal'],
-        'hasguide' => $gradinginfo['hasguide'],
-        'guidecriteria' => $gradinginfo['guidecriteria'],
-        'guidetotal' => $gradinginfo['guidetotal'],
-        'guidemaxtotal' => $gradinginfo['guidemaxtotal'],
-        'hasadvancedgrading' => $gradinginfo['hasadvancedgrading'],
-        'gradingmethodname' => $gradinginfo['gradingmethodname'],
         'showrightcolumn' => $showrightcolumn,
         'haspenalties' => $penaltyinfo['haspenalties'],
         'penalties' => $penaltyinfo['penalties'],
     ];
+    $templatedata += feedback_data_helper::grading_template_data($gradinginfo);
 
     echo $OUTPUT->header();
     echo $OUTPUT->render_from_template('local_unifiedgrader/feedback_view_forum', $templatedata);
@@ -313,6 +305,7 @@ if ($cm->modname === 'quiz') {
         'hascommentsfeature' => $hascommentsfeature,
         'commentcount' => $commentcount,
     ];
+    $templatedata += feedback_data_helper::grading_template_data($gradinginfo);
 
     echo $OUTPUT->header();
     echo $OUTPUT->render_from_template('local_unifiedgrader/feedback_view_quiz', $templatedata);
@@ -341,9 +334,16 @@ if ($cm->modname === 'bigbluebuttonbn') {
     $penaltyinfo = feedback_data_helper::format_penalties($cmid, $userid);
     $gradeinfo = feedback_data_helper::format_grade($gradedata, $activityinfo);
     $gradedisplay = $gradeinfo['gradedisplay'];
+    // The rubric or marking guide the mark was built from. Without this the
+    // student saw the overall feedback alone and had no way to see which
+    // criterion earned what — the criterion comments are often where the
+    // substance of the marking is, and they were reaching the student only in
+    // the downloadable PDF.
+    $gradinginfo = feedback_data_helper::parse_grading_data($gradedata, $context);
 
     $feedback = $gradedata['feedback'] ?? '';
-    $showrightcolumn = !empty($feedback);
+    // A marking guide with no overall feedback is still worth a column.
+    $showrightcolumn = !empty($feedback) || $gradinginfo['hasadvancedgrading'];
 
     $feedbackdownloadurl = (new moodle_url(
         '/local/unifiedgrader/download_feedback.php',
@@ -376,6 +376,7 @@ if ($cm->modname === 'bigbluebuttonbn') {
         'hascommentsfeature' => $hascommentsfeature,
         'commentcount' => $commentcount,
     ];
+    $templatedata += feedback_data_helper::grading_template_data($gradinginfo);
 
     echo $OUTPUT->header();
     echo $OUTPUT->render_from_template('local_unifiedgrader/feedback_view_quiz', $templatedata);
@@ -667,15 +668,6 @@ $templatedata = [
     'commentcount' => $commentcount,
     'canpostcomments' => $canpostcomments,
     'showrightcolumn' => $showrightcolumn,
-    'hasrubric' => $gradinginfo['hasrubric'],
-    'rubriccriteria' => $gradinginfo['rubriccriteria'],
-    'rubrictotal' => $gradinginfo['rubrictotal'],
-    'hasguide' => $gradinginfo['hasguide'],
-    'guidecriteria' => $gradinginfo['guidecriteria'],
-    'guidetotal' => $gradinginfo['guidetotal'],
-    'guidemaxtotal' => $gradinginfo['guidemaxtotal'],
-    'hasadvancedgrading' => $gradinginfo['hasadvancedgrading'],
-    'gradingmethodname' => $gradinginfo['gradingmethodname'],
     'haspenalties' => $penaltyinfo['haspenalties'],
     'penalties' => $penaltyinfo['penalties'],
     'hasmultipleattempts' => $hasmultipleattempts,
@@ -687,6 +679,7 @@ $templatedata = [
     'translationpending' => $translationpending,
     'translationpendingtext' => $translationpendingtext,
 ];
+$templatedata += feedback_data_helper::grading_template_data($gradinginfo);
 
 // Output.
 echo $OUTPUT->header();
