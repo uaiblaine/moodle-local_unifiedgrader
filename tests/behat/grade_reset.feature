@@ -55,7 +55,9 @@ Feature: Dash escape hatches in the overall grade input
     And I should not see "Exception"
     And the saved grade for "student1" on "Essay 1" is ""
 
-  # No "--" scenario on purpose: the deliberate reset differs from "-" only in
-  # the submission row, which the page cannot show (resolve_status() already
+  # No "--" scenario here on purpose: the deliberate reset differs from "-" only
+  # in the submission row, which the page cannot show (resolve_status() already
   # reports a row with status "new" as "nosubmission"). It is tested against the
   # database in assign_adapter_test::test_full_reset_strips_the_orphan_only_with_the_capability.
+  # The one thing the page shows, the warning when the submission has to be kept,
+  # is in js_save_fixes.feature.

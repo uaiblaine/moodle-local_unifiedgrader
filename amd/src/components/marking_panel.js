@@ -340,6 +340,16 @@ export default class extends BaseComponent {
 
         if (state.grade) {
             this._renderGrade({state});
+            // The initial state holds no student's data yet: loadStudent lands
+            // later. This render must leave the navigation boundary armed, or that
+            // load counts as a re-render: the box keeps the total a rubric or guide
+            // computes from the loaded criteria instead of the stored grade, and no
+            // override lock is derived. The load is then the fresh render a student
+            // switch gets.
+            if (state.submission?.userid !== state.currentUser?.id) {
+                this._lastRenderedUserid = undefined;
+                this._lastRenderedAttempt = undefined;
+            }
         }
 
         // postratings:updated only fires on change, so the first paint needs
@@ -1148,11 +1158,10 @@ export default class extends BaseComponent {
                     }
                 }
                 // Write the saved grade on a fresh render (student / attempt
-                // switch). Also fill it when the input is blank and the teacher
-                // hasn't touched it: this recovers the "first student shows blank
-                // on open until you navigate away and back" case, where the
-                // initial server load lands but the navigation-boundary gate has
-                // already been consumed for this student, so this render counts
+                // switch, and the first load, see stateReady). Also fill it when
+                // the input is blank and the teacher hasn't touched it: a safety
+                // net for server data that lands after the navigation-boundary
+                // gate has been consumed for this student, so this render counts
                 // as non-fresh and the value write is skipped. Safe because it
                 // only ever fills an EMPTY, CLEAN input — a value the teacher has
                 // typed (dirty) or any existing value is never overwritten here,
