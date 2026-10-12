@@ -49,10 +49,8 @@ final class behat_context_guard_test extends \basic_testcase {
 
         $offenders = [];
         foreach ($contexts as $path) {
-            foreach (file($path) as $number => $line) {
-                if (preg_match('/^\s*defined\s*\(\s*[\'"]MOODLE_INTERNAL[\'"]\s*\)/', $line)) {
-                    $offenders[] = basename($path) . ':' . ($number + 1);
-                }
+            foreach (self::guard_lines(file_get_contents($path)) as $line) {
+                $offenders[] = basename($path) . ':' . $line;
             }
         }
         $this->assertSame(
@@ -62,5 +60,77 @@ final class behat_context_guard_test extends \basic_testcase {
                 . 'entire Behat run — every plugin on the site, silently, with exit code 0. Replace it '
                 . 'with the canonical comment core uses: ' . implode(', ', $offenders)
         );
+    }
+
+    /**
+     * The scanner finds every spelling of the guard and ignores comments that name it.
+     *
+     * Without this control the test above would stay green if the scanner stopped
+     * matching anything at all.
+     *
+     * @return void
+     */
+    public function test_guard_scanner_detects_every_guard_form(): void {
+        $guarded = [
+            'canonical' => "<?php\ndefined('MOODLE_INTERNAL') || die();\n",
+            'or die' => "<?php\ndefined(\"MOODLE_INTERNAL\") or die();\n",
+            'if not defined' => "<?php\nif (!defined('MOODLE_INTERNAL')) {\n    die();\n}\n",
+            'spaced, mixed case' => "<?php\n\n\nif ( ! DEFINED ( 'MOODLE_INTERNAL' ) ) { exit; }\n",
+            'fully qualified' => "<?php\n\\defined('MOODLE_INTERNAL') || exit;\n",
+        ];
+        foreach ($guarded as $form => $code) {
+            $this->assertNotEmpty(self::guard_lines($code), "The scanner missed the '{$form}' guard.");
+        }
+        $this->assertSame([4], self::guard_lines("<?php\n\n\nif ( ! DEFINED ( 'MOODLE_INTERNAL' ) ) { exit; }\n"));
+
+        $clean = "<?php\n"
+            . "// NOTE: no MOODLE_INTERNAL test here, defined('MOODLE_INTERNAL') would kill behat.\n"
+            . "/* defined('MOODLE_INTERNAL') || die(); */\n"
+            . "/** Not defined('MOODLE_INTERNAL') either. */\n"
+            . "\$x = 'defined(\\'MOODLE_INTERNAL\\')';\n"
+            . "defined('BEHAT_SITE_RUNNING');\n";
+        $this->assertSame([], self::guard_lines($clean));
+    }
+
+    /**
+     * Return the line numbers on which code (not a comment or a string) calls
+     * defined('MOODLE_INTERNAL').
+     *
+     * Tokenising rather than matching lines catches the guard in any position, such as
+     * the older if (!defined('MOODLE_INTERNAL')) { die(); } idiom, while the canonical
+     * "NOTE: no MOODLE_INTERNAL test here" comment and string literals never count.
+     *
+     * @param string $code PHP source.
+     * @return int[] One-based line numbers, in source order.
+     */
+    private static function guard_lines(string $code): array {
+        // Drop whitespace and comments so the remaining tokens can be read as a sequence.
+        $tokens = array_values(array_filter(
+            token_get_all($code),
+            static fn($token): bool => !is_array($token)
+                || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+        ));
+
+        $lines = [];
+        foreach ($tokens as $i => $token) {
+            // A leading backslash (\defined) tokenises as one fully qualified name on PHP 8.
+            $isdefined = is_array($token)
+                && in_array($token[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)
+                && strcasecmp(ltrim($token[1], '\\'), 'defined') === 0;
+            if (!$isdefined) {
+                continue;
+            }
+            $open = $tokens[$i + 1] ?? null;
+            $argument = $tokens[$i + 2] ?? null;
+            if (
+                $open === '('
+                && is_array($argument)
+                && $argument[0] === T_CONSTANT_ENCAPSED_STRING
+                && trim($argument[1], '\'"') === 'MOODLE_INTERNAL'
+            ) {
+                $lines[] = $token[2];
+            }
+        }
+        return $lines;
     }
 }

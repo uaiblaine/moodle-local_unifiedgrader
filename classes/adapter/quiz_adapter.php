@@ -1141,11 +1141,6 @@ class quiz_adapter extends base_adapter {
     // Private helpers.
 
     /**
-     * Get the quiz-level duedate from the quizaccess_duedate plugin.
-     *
-     * @return int Timestamp or 0.
-     */
-    /**
      * Calculate the late penalty percentage from the quizaccess_duedate plugin.
      *
      * Mirrors the observer's logic: checks the first finished attempt's submission
@@ -1662,9 +1657,9 @@ class quiz_adapter extends base_adapter {
         $summary = $state->get_summary_state();
         return match ($summary) {
             'needsgrading' => 'bg-warning text-dark',
-            'manuallygraded' => 'bg-info',
-            'autograded' => 'bg-success',
-            default => 'bg-secondary',
+            'manuallygraded' => 'bg-info text-white',
+            'autograded' => 'bg-success text-white',
+            default => 'bg-secondary text-dark',
         };
     }
 

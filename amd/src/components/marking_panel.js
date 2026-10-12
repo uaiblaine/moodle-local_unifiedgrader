@@ -160,6 +160,16 @@ export default class extends BaseComponent {
         // What the last dispatched save sent (see _formSnapshot), so a held
         // autosave or a refused save can tell a real change from a re-render.
         this._dispatchedForm = null;
+        // The student the last dispatched save was for. Its end may only settle
+        // the form and the offline copy when that student is still on screen.
+        this._dispatchedFor = null;
+        // The form a save sent when its round trip failed on the network and the
+        // payload went to SaveQueue: {userid, form}, or null. A later retry marks
+        // the form clean only if it still holds exactly that.
+        this._queuedForm = null;
+        // Resolvers for callers of 'unifiedgrader:requestsave' that wait for a
+        // held request to read the form (see _releaseSaveWaiters).
+        this._saveWaiters = [];
         // Set when _updateUI sees a grade save start (ui.gradesaving), cleared
         // when it handles that save's end. Only that end may mark the form clean.
         this._saveCycleOpen = false;
@@ -215,10 +225,29 @@ export default class extends BaseComponent {
         this._updateMaxGrade(state);
 
         // Listen for save requests from other components (e.g. student navigator before switch).
-        document.addEventListener('unifiedgrader:requestsave', () => {
+        // A request held behind an in-flight save has not read the form yet, so
+        // a requester that is about to replace the form (the navigator loading
+        // another student) gets a promise in detail.waitfor that settles once
+        // the held request has been dispatched or dropped.
+        document.addEventListener('unifiedgrader:requestsave', (e) => {
             if (DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback')) {
                 this._handleSaveGrade();
             }
+            if (this._saveInFlight && this._pendingSaveRequest && Array.isArray(e.detail?.waitfor)) {
+                e.detail.waitfor.push(new Promise((resolve) => {
+                    this._saveWaiters.push(resolve);
+                }));
+            }
+        });
+
+        // A save queued after a network failure has reached the server on retry.
+        document.addEventListener('unifiedgrader:queuedsavestored', (e) => {
+            this._settleQueuedSave(e.detail || {});
+        });
+
+        // An offline copy of the grade the teacher chose to restore (grader.js).
+        document.addEventListener('unifiedgrader:restoregrade', (e) => {
+            this._restoreCachedGrade(e.detail || {});
         });
 
         // Listen for grade input changes to update percentage and final grade in real time.
@@ -226,10 +255,9 @@ export default class extends BaseComponent {
         if (gradeInput) {
             gradeInput.addEventListener('input', () => {
                 // A read-only box cannot have been typed into, so an input event
-                // on one is synthetic — the offline-cache restore dispatches one
-                // (grader.js _restoreFromCache). Treating that as a manual
-                // override would freeze the computed readout on a quiz behind a
-                // value that has nowhere to be saved.
+                // on one is synthetic. Treating that as a manual override would
+                // freeze the computed readout on a quiz behind a value that has
+                // nowhere to be saved.
                 if (gradeInput.readOnly) {
                     return;
                 }
@@ -580,11 +608,127 @@ export default class extends BaseComponent {
         if (!cmid || !userid) {
             return;
         }
-        const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
-        const scaleInput = this.getElement(this.selectors.SCALE_INPUT);
-        const value = gradeInput ? gradeInput.value : (scaleInput ? scaleInput.value : '');
+        // Both inputs are in the page whatever the activity uses; read the live one.
+        const input = this.getElement(state.activity?.usescale ? this.selectors.SCALE_INPUT : this.selectors.GRADE_INPUT);
+        const value = input ? input.value : '';
         const advancedGradingData = this._collectAdvancedGradingData();
         OfflineCache.save(cmid, userid, 'grade', {value, advancedGradingData});
+    }
+
+    /**
+     * Put back a grade recovered from the offline cache (see grader.js _restoreFromCache).
+     *
+     * The cached entry holds the grade box and the criteria behind it
+     * (_cacheGradeValue). The criteria go back first: on an advanced-grading
+     * activity the server stores what they compute, and a restored box next to
+     * the criteria loaded from the server would be saved as a manual override of
+     * criteria the teacher never chose. The box then gets the cached value only
+     * where it can be typed into, locked as an override when it is not the
+     * restored criteria's total, the test a fresh render applies. A read-only box
+     * (a quiz, or advanced grading without overrides) shows the restored total.
+     *
+     * @param {object} detail Event detail.
+     * @param {number} detail.userid Student the cached entry belongs to.
+     * @param {string} detail.value Cached grade box value.
+     * @param {string} detail.advancedGradingData Cached criteria, as _collectAdvancedGradingData writes them.
+     */
+    _restoreCachedGrade({userid, value, advancedGradingData}) {
+        const state = this.reactive.state;
+        if (!userid || userid !== state.currentUser?.id) {
+            return;
+        }
+        const usescale = !!state.activity?.usescale;
+        const gradeInput = this.getElement(this.selectors.GRADE_INPUT);
+        const scaleInput = this.getElement(this.selectors.SCALE_INPUT);
+
+        if (this._gradingDefinition && advancedGradingData) {
+            if (gradeInput?.readOnly) {
+                this._gradeManuallyOverridden = false;
+            }
+            this._applyCachedCriteria(advancedGradingData);
+        }
+
+        if (usescale) {
+            if (scaleInput && value !== undefined) {
+                scaleInput.value = value;
+            }
+        } else if (gradeInput) {
+            if (!gradeInput.readOnly && value !== undefined) {
+                gradeInput.value = String(value ?? '');
+                this._gradeManuallyOverridden = this._differsFromComputedGrade(gradeInput.value);
+            }
+            this._updateOverrideIndicator(this._lastRubricGrade);
+            this._validateGrade();
+            this._updatePercentage();
+            this._updateFinalGradeDisplay();
+        }
+        DirtyTracker.markDirty('grade');
+    }
+
+    /**
+     * Apply cached criteria to the rendered rubric, marking guide or quiz questions.
+     *
+     * Criteria absent from the current definition are ignored. The quiz base
+     * total is not recomputed: it must stay the one loaded from the server, so
+     * the total reflects the restored marks.
+     *
+     * @param {string} json Criteria as _collectAdvancedGradingData serialises them.
+     */
+    _applyCachedCriteria(json) {
+        let data = null;
+        try {
+            data = JSON.parse(json);
+        } catch {
+            return;
+        }
+        const definition = this._gradingDefinition;
+        const body = this.getElement(this.selectors.RUBRIC_BODY);
+        if (!data || !definition || !body) {
+            return;
+        }
+        const method = definition.method;
+        if (method === 'rubric' || method === 'rubric_ranges') {
+            const fill = {};
+            for (const [critId, crit] of Object.entries(data.criteria || {})) {
+                if (crit?.levelid === undefined || crit.levelid === null) {
+                    continue;
+                }
+                const hasGrade = crit.grade !== undefined && crit.grade !== null && crit.grade !== '';
+                fill[critId] = {
+                    levelid: parseInt(crit.levelid, 10),
+                    grade: hasGrade ? parseFloat(crit.grade) : null,
+                };
+            }
+            this._updateRubricSelections(body, definition, fill);
+            return;
+        }
+        if (method !== 'guide' && method !== 'quizmanual') {
+            return;
+        }
+        const isQuiz = method === 'quizmanual';
+        const entries = (isQuiz ? data.questions : data.criteria) || {};
+        definition.criteria.forEach((criterion) => {
+            const id = String(criterion.id);
+            const cached = entries[id];
+            if (!cached) {
+                return;
+            }
+            const score = String((isQuiz ? cached.mark : cached.score) ?? '');
+            const remark = String((isQuiz ? cached.comment : cached.remark) ?? '');
+            const scoreInput = body.querySelector('input[data-criterionid="' + id + '"]:not([data-levelid])');
+            const remarkInput = body.querySelector('textarea[data-criterionid="' + id + '"]');
+            if (scoreInput) {
+                scoreInput.value = score;
+                this._guideScores[id] = score;
+                const errorEl = body.querySelector('[data-score-error="' + id + '"]');
+                this._validateGuideScore(criterion, scoreInput, errorEl);
+            }
+            if (remarkInput) {
+                remarkInput.value = remark;
+                this._guideRemarks[id] = remark;
+            }
+        });
+        this._updateGuideTotal();
     }
 
     /**
@@ -1043,9 +1187,7 @@ export default class extends BaseComponent {
                     // would compute, this is a returning teacher's prior
                     // override — restore the locked state and surface the
                     // indicator badge so the discrepancy is visible.
-                    if (this._gradingDefinition && this._lastRubricGrade !== null
-                            && displayGrade !== null
-                            && Math.abs(parseFloat(displayGrade) - this._lastRubricGrade) > 0.005) {
+                    if (this._differsFromComputedGrade(displayGrade)) {
                         this._gradeManuallyOverridden = true;
                     }
                     this._updateOverrideIndicator(this._lastRubricGrade);
@@ -1357,6 +1499,19 @@ export default class extends BaseComponent {
      * Called by _updateUI once per grade save. No other ui change (posting or
      * hiding grades, loading a student, a post rating) may mark the form clean.
      *
+     * Only a save for the student still on screen settles the form. One that
+     * ends after the teacher moved on (saveGrade skips its refresh then) leaves
+     * the new student's dirty flags and offline copy alone; it clears the offline
+     * copy of the student it stored, unless a request held for that student was
+     * dropped, whose edits only that copy still holds.
+     *
+     * A save whose round trip failed on the network went to SaveQueue rather than
+     * the server (ui.lastsavequeued). It is not stored yet, so the form stays
+     * dirty, which keeps the leave-page warning, and the offline copy stays; the
+     * retry settles both (see _settleQueuedSave).
+     *
+     * Releases the callers waiting on a held request (see _releaseSaveWaiters).
+     *
      * @param {object} state Current state.
      */
     _endGradeSave(state) {
@@ -1365,10 +1520,55 @@ export default class extends BaseComponent {
 
         if (state.ui.lastsavefailed) {
             this._afterRefusedSave(state);
+            this._releaseSaveWaiters();
             return;
         }
 
-        // The save completed — mark clean.
+        const cmid = state.activity?.cmid;
+        const currentid = state.currentUser?.id;
+        const savedfor = this._dispatchedFor;
+        const queued = !!state.ui.lastsavequeued;
+        const pending = this._pendingSaveRequest;
+        this._pendingSaveRequest = null;
+
+        if (queued) {
+            this._queuedForm = {userid: savedfor, form: this._dispatchedForm};
+        } else if (this._queuedForm?.userid === savedfor) {
+            // A stored save carries the whole form, so it supersedes the queued one
+            // (saveGrade discards that entry from SaveQueue).
+            this._queuedForm = null;
+        }
+
+        if (savedfor === currentid) {
+            if (!queued) {
+                this._markFormSaved(cmid, currentid);
+            }
+        } else if (!queued && cmid && savedfor && pending?.userid !== savedfor) {
+            OfflineCache.remove(cmid, savedfor, 'grade');
+            OfflineCache.remove(cmid, savedfor, 'feedback');
+        }
+
+        // Run a save that arrived while this one was in flight. It reads
+        // the live form now, so it carries whatever the teacher changed
+        // during the round trip; a held autosave runs only if the form
+        // differs from what this save sent, or if this save was for another
+        // student. Cleared before dispatching, so the re-run can queue a
+        // request of its own without looping.
+        const changed = !pending?.auto || savedfor !== currentid
+            || this._formSnapshot() !== this._dispatchedForm;
+        if (pending && pending.userid === currentid && changed) {
+            this._handleSaveGrade(pending.explicit);
+        }
+        this._releaseSaveWaiters();
+    }
+
+    /**
+     * Record the form as saved: snapshots, dirty flags and offline copy.
+     *
+     * @param {number} cmid Course module ID.
+     * @param {number} userid The student on screen, whose form this is.
+     */
+    _markFormSaved(cmid, userid) {
         const gradeInputEl = this.getElement(this.selectors.GRADE_INPUT);
         const scaleInputEl = this.getElement(this.selectors.SCALE_INPUT);
         const currentGradeValue = gradeInputEl ? gradeInputEl.value
@@ -1378,25 +1578,57 @@ export default class extends BaseComponent {
         DirtyTracker.markClean('grade');
         DirtyTracker.markClean('feedback');
 
-        // Clear the IndexedDB cache after successful server save.
-        const cmid = state.activity?.cmid;
-        const userid = state.currentUser?.id;
         if (cmid && userid) {
             OfflineCache.remove(cmid, userid, 'grade');
             OfflineCache.remove(cmid, userid, 'feedback');
         }
+    }
 
-        // Run a save that arrived while this one was in flight. It reads
-        // the live form now, so it carries whatever the teacher changed
-        // during the round trip; a held autosave runs only if the form
-        // differs from what this save sent. Cleared before dispatching, so
-        // the re-run can queue a request of its own without looping.
-        const pending = this._pendingSaveRequest;
-        this._pendingSaveRequest = null;
-        const changed = !pending?.auto || this._formSnapshot() !== this._dispatchedForm;
-        if (pending && pending.userid === state.currentUser?.id && changed) {
-            this._handleSaveGrade(pending.explicit);
+    /**
+     * Settle a save that SaveQueue has now delivered.
+     *
+     * For the student on screen the form is marked saved only if it still holds
+     * exactly what was queued and no other save is running: an edit made since
+     * is not in the delivered payload and must stay unsaved. For a student the
+     * teacher has left, only that student's offline copy is cleared.
+     *
+     * @param {object} detail Event detail.
+     * @param {number} detail.cmid Course module ID the save was for.
+     * @param {number} detail.userid Student the save was for.
+     */
+    _settleQueuedSave({cmid, userid}) {
+        const state = this.reactive.state;
+        if (!cmid || !userid || cmid !== state.activity?.cmid) {
+            return;
         }
+        const queued = this._queuedForm;
+        if (userid !== state.currentUser?.id) {
+            OfflineCache.remove(cmid, userid, 'grade');
+            OfflineCache.remove(cmid, userid, 'feedback');
+            if (queued?.userid === userid) {
+                this._queuedForm = null;
+            }
+            return;
+        }
+        if (queued?.userid !== userid || this._saveInFlight || this._formSnapshot() !== queued.form) {
+            return;
+        }
+        this._queuedForm = null;
+        this._markFormSaved(cmid, userid);
+    }
+
+    /**
+     * Release the callers waiting for a held save request to read the form.
+     *
+     * Called at the end of every grade save, after the held request has been
+     * dispatched (and so has read the form) or dropped. The student navigator
+     * waits on this before it loads another student, so a request held for the
+     * student being left still reads that student's form.
+     */
+    _releaseSaveWaiters() {
+        const waiters = this._saveWaiters;
+        this._saveWaiters = [];
+        waiters.forEach((resolve) => resolve());
     }
 
     /**
@@ -1406,12 +1638,17 @@ export default class extends BaseComponent {
      * keeps the leave-page warning, and so does the offline copy. An armed
      * feedback collapse is disarmed, because no save landed for it to confirm.
      *
+     * A refusal for a student the teacher has since left touches nothing on the
+     * form, which belongs to another student; only a request held for that
+     * other student runs.
+     *
      * The rest depends on whether the form still holds exactly what the refused
      * save sent. If it does, a held request would send the same refused payload
      * and raise the same dialogue again, so it is dropped; and a refused clear
      * ("-", "--" or other non-numeric text; see _handleSaveGrade), which blanked
      * the grade box before sending, has the box put back to the grade this panel
-     * last loaded, which the refusal leaves stored.
+     * last loaded, which the refusal leaves stored, with the override lock
+     * derived from it as a fresh render does.
      * A grade typed or a level picked during the round trip is a new edit: it is
      * neither overwritten nor dropped, and a request held for it runs.
      *
@@ -1423,9 +1660,10 @@ export default class extends BaseComponent {
     _afterRefusedSave(state) {
         this._collapseFeedbackAfterSave = false;
 
-        const untouched = this._formSnapshot() === this._dispatchedForm;
         const pending = this._pendingSaveRequest;
         this._pendingSaveRequest = null;
+        const sameStudent = this._dispatchedFor === state.currentUser?.id;
+        const untouched = sameStudent && this._formSnapshot() === this._dispatchedForm;
         if (!untouched) {
             if (pending && pending.userid === state.currentUser?.id) {
                 this._handleSaveGrade(pending.explicit);
@@ -1450,6 +1688,11 @@ export default class extends BaseComponent {
             input.value = usescale ? String(Math.round(stored)) : String(stored);
         }
         if (!usescale) {
+            // The clear unlocked the box. If the grade left stored is an override
+            // of the rubric or guide total, lock it again, or the next criterion
+            // edit would overwrite it with the computed total and autosave that.
+            this._gradeManuallyOverridden = this._differsFromComputedGrade(input.value);
+            this._updateOverrideIndicator(this._lastRubricGrade);
             this._updatePercentage();
             this._updateFinalGradeDisplay();
         }
@@ -1460,6 +1703,24 @@ export default class extends BaseComponent {
         if (cmid && userid) {
             OfflineCache.remove(cmid, userid, 'grade');
         }
+    }
+
+    /**
+     * Whether a grade differs from the total the rubric or marking guide computes.
+     *
+     * The test a fresh render uses to decide that a stored grade is a manual
+     * override, so every place that restores a grade derives the lock the same way.
+     *
+     * @param {number|string|null} grade Grade as shown in the box.
+     * @return {boolean} True when advanced grading is active and the grade is not its total.
+     */
+    _differsFromComputedGrade(grade) {
+        if (!this._gradingDefinition || this._lastRubricGrade === null
+                || grade === null || grade === undefined || grade === '') {
+            return false;
+        }
+        const value = parseFloat(grade);
+        return !isNaN(value) && Math.abs(value - this._lastRubricGrade) > 0.005;
     }
 
     /**
@@ -2718,8 +2979,9 @@ export default class extends BaseComponent {
      * @param {object} currentFill Map of criterionid → server-selected levelid.
      */
     _updateRubricSelections(body, definition, currentFill) {
-        // Only called on a fresh render (student switch / initial load), so
-        // it's safe to overwrite the DOM with the server-side selections.
+        // Only called on a fresh render (student switch / initial load) or an
+        // offline-cache restore the teacher chose (_applyCachedCriteria), so
+        // it's safe to overwrite the DOM with the given selections.
         definition.criteria.forEach((criterion) => {
             const id = criterion.id;
             const idstr = String(id);
@@ -3317,10 +3579,16 @@ export default class extends BaseComponent {
                 return Math.max(0, this._roundToGradePrecision(this._quizBaseGrade + delta));
             }
         }
+        const activityMax = parseFloat(gradeInput.max) || 0;
+        if (this._gradingDefinition?.method === 'rubric' && activityMax > 0) {
+            const rubricGrade = this._computeCoreRubricGrade(total, activityMax);
+            if (rubricGrade !== null) {
+                return rubricGrade;
+            }
+        }
         // Normalize the guide total to the assignment's grade scale.
         // A marking guide may have a different max total than the activity
         // max grade (e.g. guide criteria sum to 13 but assignment is out of 10).
-        const activityMax = parseFloat(gradeInput.max) || 0;
         if (maxTotal > 0 && activityMax > 0 && maxTotal !== activityMax) {
             return this._roundToGradePrecision((total / maxTotal) * activityMax);
         }
@@ -3342,6 +3610,46 @@ export default class extends BaseComponent {
         const decimals = Math.max(2, parseInt(this._gradingDefinition?.decimalpoints ?? 2, 10));
         const factor = Math.pow(10, decimals);
         return Math.round(value * factor) / factor;
+    }
+
+    /**
+     * The grade core's rubric stores for a rubric score, on a points activity.
+     *
+     * Mirrors gradingform_rubric_instance::get_grade() so the total written into
+     * the grade box is the grade the server computes from the same levels; the
+     * box is sent as the grade, and with manual overrides allowed a different
+     * figure would replace the server's. The score range is
+     * gradingform_rubric_controller::get_min_max_score(): per criterion, its
+     * lowest and highest level. With "lockzeropoints" (the definition's option,
+     * shipped by the adapters) the score scales from zero; without it, from the
+     * minimum score, so the lowest levels everywhere give the minimum grade. The
+     * minimum grade of a points activity is 0. Core rounds to an integer only
+     * when the grade item disallows decimals, which no points activity does.
+     *
+     * @param {number} total Sum of the selected levels' scores.
+     * @param {number} activityMax The activity's maximum grade.
+     * @return {number|null} The grade, or null when the rubric has no score range (core grades nothing then).
+     */
+    _computeCoreRubricGrade(total, activityMax) {
+        let minscore = 0;
+        let maxscore = 0;
+        for (const criterion of this._gradingDefinition?.criteria || []) {
+            const scores = (criterion.levels || []).map((l) => parseFloat(l.score) || 0);
+            if (scores.length) {
+                minscore += Math.min(...scores);
+                maxscore += Math.max(...scores);
+            }
+        }
+        if (maxscore <= minscore) {
+            return null;
+        }
+        let grade;
+        if (this._gradingDefinition.lockzeropoints === false) {
+            grade = (total - minscore) / (maxscore - minscore) * activityMax;
+        } else {
+            grade = Math.max(0, total / maxscore * activityMax);
+        }
+        return this._roundToGradePrecision(grade);
     }
 
     /**
@@ -3714,7 +4022,10 @@ export default class extends BaseComponent {
                 auto: false,
                 // The student it was requested for. If the teacher has moved on
                 // by the time the round trip ends, the re-run would be reading
-                // somebody else's form, so it is discarded instead.
+                // somebody else's form, so it is discarded instead. The student
+                // navigator waits for the re-run before it loads another student
+                // (see the 'unifiedgrader:requestsave' listener), so this only
+                // happens when that wait times out.
                 userid: this.reactive.state.currentUser?.id,
             };
             return;
@@ -3780,6 +4091,7 @@ export default class extends BaseComponent {
         this._collapseFeedbackAfterSave = explicit && this._editingFeedback;
 
         this._dispatchedForm = this._formSnapshot();
+        this._dispatchedFor = state.currentUser.id;
 
         this.reactive.dispatch(
             'saveGrade',

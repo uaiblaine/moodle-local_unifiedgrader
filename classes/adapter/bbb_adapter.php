@@ -921,6 +921,10 @@ class bbb_adapter extends base_adapter {
     /**
      * Check whether the BBB grade is released and visible to the student.
      *
+     * Released means a final grade exists and neither the grade item nor the
+     * student's own grade is hidden in the gradebook: a teacher can hide one
+     * student's grade, or hide it until a date, while the item stays visible.
+     *
      * @param int $userid
      * @return bool
      */
@@ -933,7 +937,7 @@ class bbb_adapter extends base_adapter {
             return false;
         }
         $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
-        return $gradegrade && $gradegrade->finalgrade !== null;
+        return $gradegrade && $gradegrade->finalgrade !== null && !$gradegrade->is_hidden();
     }
 
     /**
@@ -1042,6 +1046,7 @@ class bbb_adapter extends base_adapter {
                 $definition->rubric_criteria,
             );
             $result['isranged'] = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method);
+            $result['lockzeropoints'] = \local_unifiedgrader\grading_method_helper::rubric_lockzeropoints($controller);
             $result['areaid'] = (int) $controller->get_areaid();
             $result['pdfurl'] = \local_unifiedgrader\grading_method_helper::get_pdf_url(
                 $method,
@@ -1326,11 +1331,31 @@ class bbb_adapter extends base_adapter {
      * own sessions, so a session they were not in cannot appear here, and the
      * annotations are those addressed to them.
      *
+     * The method checks its own access rather than trusting the caller: a grader
+     * may read any student's report, a student only their own and only once the
+     * grade is released, which is the same rule the feedback pages apply.
+     *
      * @param int $userid The student the report is about.
      * @return array {hasengagement, sessioncount, totals, sessions[], annotations[],
      *                hasannotations}
+     * @throws \required_capability_exception When the current user may not read this report.
+     * @throws \moodle_exception When it is the student's own report and the grade is not released.
      */
     public function get_feedback_report(int $userid): array {
+        global $USER;
+
+        if (!has_capability('local/unifiedgrader:grade', $this->context)) {
+            if ($userid !== (int) $USER->id) {
+                throw new \required_capability_exception($this->context, 'local/unifiedgrader:grade', 'nopermissions', '');
+            }
+            require_capability('local/unifiedgrader:viewfeedback', $this->context);
+            if (!$this->is_grade_released($userid)) {
+                throw new \moodle_exception('feedback_not_available', 'local_unifiedgrader');
+            }
+        } else if (!$this->grader_shares_group_with($userid)) {
+            throw new \required_capability_exception($this->context, 'moodle/site:accessallgroups', 'nopermissions', '');
+        }
+
         $summary = $this->get_engagement_summary($userid);
 
         // Label each session with its recording's date where the two reconcile,
@@ -1433,6 +1458,32 @@ class bbb_adapter extends base_adapter {
         return $hours > 0
             ? sprintf('%d:%02d:%02d', $hours, $minutes, $secs)
             : sprintf('%d:%02d', $minutes, $secs);
+    }
+
+    /**
+     * Whether the current grader may see this student under the activity's group mode.
+     *
+     * Core's rule for separate groups: a user without moodle/site:accessallgroups sees only members of
+     * the groups they belong to, taken within the activity's grouping when it has one, as
+     * filter_to_group_recordings() does. Any other group mode, or accessallgroups, sees everyone.
+     *
+     * @param int $userid The student.
+     * @return bool
+     */
+    private function grader_shares_group_with(int $userid): bool {
+        global $USER;
+
+        if ((int) groups_get_activity_groupmode($this->cm, $this->course) !== SEPARATEGROUPS) {
+            return true;
+        }
+        if (has_capability('moodle/site:accessallgroups', $this->context)) {
+            return true;
+        }
+        $groupingid = (int) ($this->cm->groupingid ?? 0);
+        $courseid = (int) $this->course->id;
+        $mine = groups_get_all_groups($courseid, (int) $USER->id, $groupingid, 'g.id');
+        $theirs = groups_get_all_groups($courseid, $userid, $groupingid, 'g.id');
+        return !empty(array_intersect_key($mine, $theirs));
     }
 
     /**

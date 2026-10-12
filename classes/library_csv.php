@@ -159,42 +159,74 @@ class library_csv {
     }
 
     /**
+     * Prefix an export with a UTF-8 byte order mark, as Excel needs to read it as UTF-8.
+     *
+     * Without it Excel on Windows opens the file in the ANSI code page and accented comment
+     * text turns into mojibake. import() strips the mark again, so a downloaded file imports
+     * back unchanged.
+     *
+     * @param string $csv CSV content from one of the export methods.
+     * @return string The same content, starting with exactly one byte order mark.
+     */
+    public static function with_bom(string $csv): string {
+        return \core_text::UTF8_BOM . \core_text::trim_utf8_bom($csv);
+    }
+
+    /**
+     * Whether a cell must be quoted so a spreadsheet does not read it as a formula.
+     *
+     * Mirrors {@see \core\dataformat::escape_spreadsheet_formula()}, which tests the first
+     * character after any leading whitespace for =, +, - or @ (a cell such as " =1+1" is
+     * evaluated too). Two differences keep the rule reversible: a lone "-" is quoted as well,
+     * since the quote is what import removes, and a cell starting with a quote, tab or
+     * carriage return is quoted whatever follows.
+     *
+     * @param string $value Cell text.
+     * @return bool
+     */
+    private static function needs_escape(string $value): bool {
+        if ($value === '') {
+            return false;
+        }
+        if (strpos("=+-@\t\r'", $value[0]) !== false) {
+            return true;
+        }
+        $trimmed = ltrim($value);
+        return $trimmed !== '' && strpos('=+-@', $trimmed[0]) !== false;
+    }
+
+    /**
      * Neutralise a cell that a spreadsheet would read as a formula.
      *
-     * A cell starting with =, +, - or @ is evaluated as a formula when the file is opened in
-     * a spreadsheet, and a leading tab or carriage return can be read as one too. Comment
-     * text, tag names and owner names are written by teachers, so an export must not hand
-     * them to whoever opens it as live formulas. Such a cell gets a leading single quote,
-     * which spreadsheets take as text.
+     * Comment text, tag names and owner names are written by teachers, so an export must
+     * not hand them to whoever opens it as live formulas. Such a cell (see needs_escape())
+     * gets a leading single quote, which spreadsheets take as text.
      *
      * A cell that already starts with a quote gets one as well. That is what keeps the rule
      * reversible: an exported cell starts with a quote only when this method put it there,
-     * so unescape_cell() can always remove exactly one. Core's
-     * {@see \core\dataformat::escape_spreadsheet_formula()} is not reversible that way.
+     * so unescape_cell() can always remove exactly one. Core's helper is not reversible that way.
      *
      * @param string $value Cell text.
      * @return string
      */
     private static function escape_cell(string $value): string {
-        if ($value !== '' && strpos("=+-@\t\r'", $value[0]) !== false) {
-            return "'" . $value;
-        }
-        return $value;
+        return self::needs_escape($value) ? "'" . $value : $value;
     }
 
     /**
      * Undo escape_cell() on a cell read back from a CSV file.
      *
-     * Only a quote escape_cell() could have added is removed: one followed by a character it
-     * quotes. A cell that merely starts with a quote, as "'Tis well argued" does in a file written
-     * by hand or exported before cells were quoted, keeps it, so re-importing such a file still
-     * finds the comment already present instead of adding a second, altered copy.
+     * Only a quote escape_cell() could have added is removed: one followed by text that
+     * needs_escape() would have quoted. A cell that merely starts with a quote, as "'Tis well
+     * argued" does in a file written by hand or exported before cells were quoted, keeps it,
+     * so re-importing such a file still finds the comment already present instead of adding a
+     * second, altered copy.
      *
      * @param string $value Cell text.
      * @return string
      */
     private static function unescape_cell(string $value): string {
-        if (strlen($value) > 1 && $value[0] === "'" && strpos("=+-@\t\r'", $value[1]) !== false) {
+        if ($value !== '' && $value[0] === "'" && self::needs_escape(substr($value, 1))) {
             return substr($value, 1);
         }
         return $value;

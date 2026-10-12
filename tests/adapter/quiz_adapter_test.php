@@ -464,11 +464,6 @@ final class quiz_adapter_test extends \advanced_testcase {
         $s = $this->create_scenario(['studentcount' => 1]);
         $student = $s->scenario->students[0];
 
-        // Save feedback for attempt 2 (latest).
-        $s->adapter->save_grade($student->id, null, '<p>Latest attempt</p>', FORMAT_HTML, [], 0, 0, 2);
-        // Save feedback for attempt 1 (earlier) — gradebook should still have attempt 2's.
-        $s->adapter->save_grade($student->id, null, '<p>Earlier attempt</p>', FORMAT_HTML, [], 0, 0, 1);
-
         $gradeitem = \grade_item::fetch([
             'itemtype' => 'mod',
             'itemmodule' => 'quiz',
@@ -476,15 +471,23 @@ final class quiz_adapter_test extends \advanced_testcase {
             'itemnumber' => 0,
             'courseid' => $s->scenario->course->id,
         ]);
-        if ($gradeitem) {
-            $gradegrade = \grade_grade::fetch([
-                'itemid' => $gradeitem->id,
-                'userid' => $student->id,
-            ]);
-            if ($gradegrade) {
-                $this->assertStringContainsString('Latest attempt', $gradegrade->feedback);
-            }
-        }
+        $this->assertNotEmpty($gradeitem, 'The quiz has no grade item to sync feedback into.');
+        // The sync only updates the gradebook row a graded attempt leaves behind;
+        // it never creates one. Stand in for that attempt's row.
+        $gradeitem->update_final_grade((int) $student->id, 5.0, 'test');
+
+        // Save feedback for attempt 2 (latest).
+        $s->adapter->save_grade($student->id, null, '<p>Latest attempt</p>', FORMAT_HTML, [], 0, 0, 2);
+        // Save feedback for attempt 1 (earlier) — gradebook should still have attempt 2's.
+        $s->adapter->save_grade($student->id, null, '<p>Earlier attempt</p>', FORMAT_HTML, [], 0, 0, 1);
+
+        $gradegrade = \grade_grade::fetch([
+            'itemid' => $gradeitem->id,
+            'userid' => $student->id,
+        ]);
+        $this->assertNotEmpty($gradegrade, 'The gradebook row the attempt left behind is missing.');
+        $this->assertStringContainsString('Latest attempt', $gradegrade->feedback);
+        $this->assertStringNotContainsString('Earlier attempt', $gradegrade->feedback);
     }
 
     /**

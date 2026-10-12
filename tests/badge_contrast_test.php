@@ -28,6 +28,21 @@ namespace local_unifiedgrader;
  * near-black text instead. This plugin requires Moodle 5.0, so only the light-background
  * case can occur, but stating the colour explicitly is correct on both.
  *
+ * Two rules enforce that, and each requires the text class its own background maps to
+ * (required_text_colour()), not merely any text-* class:
+ *
+ * 1. Badge lines. On a line that mentions a badge, each bg-* class must have its required
+ *    text class in the same segment. A segment is the run of text between quote marks and
+ *    Mustache section tags, so `{{#x}}bg-a text-white{{/x}}{{^x}}bg-b text-dark{{/x}}`
+ *    and `cond ? 'bg-a text-white' : 'bg-b text-dark'` are checked branch by branch.
+ * 2. Class maps. A badge class assembled elsewhere (student_navigator.js _getStatusBadgeClass()
+ *    and _getStatusInfo(), quiz_adapter::get_state_badge_class(), a ternary arm) never shares a
+ *    line with the word "badge". A string literal that holds nothing but bg-* and text-* tokens
+ *    and sits in value position (after `=>`, `:`, `?`, `||`, `return`) is a class value, so
+ *    it must carry its text class too. Literals with other words (`border`, `d-flex`) belong to
+ *    rule 1 or to non-badge markup, and literals as arguments (`toggle('bg-primary')`), selectors
+ *    and array keys (`'bg-warning' => 'background-color: ...'`) are not in value position.
+ *
  * @package    local_unifiedgrader
  * @category   test
  * @copyright  2026 South African Theological Seminary (mathieu@sats.ac.za)
@@ -49,6 +64,7 @@ final class badge_contrast_test extends \basic_testcase {
             'bg-dark' => 'text-white',
             'bg-secondary' => 'text-dark',
             'bg-warning' => 'text-dark',
+            'bg-light' => 'text-dark',
         ];
     }
 
@@ -98,12 +114,33 @@ final class badge_contrast_test extends \basic_testcase {
     }
 
     /**
-     * A badge carrying a background utility must carry a text colour beside it.
+     * Offences in one segment of markup: a background class without its required text class.
      *
-     * Checked on every line that mentions a badge and a background, rather than by
-     * parsing class attributes: the classes are assembled in Mustache conditionals and
-     * in JS string concatenation as well as in plain attributes, and a parser strict
-     * enough to read all three would be easier to fool than a line scan.
+     * @param string $segment Text between quote marks or Mustache section tags.
+     * @return array Messages, one per background class lacking its text class.
+     */
+    private function segment_offences(string $segment): array {
+        $found = [];
+        foreach ($this->required_text_colour() as $background => $required) {
+            /*
+             * Not preceded by "text-": Bootstrap 5.2's text-bg-* utility sets the
+             * background and a contrasting colour, so it satisfies the rule on its own.
+             */
+            if (!preg_match('/(?<![\w-])' . preg_quote($background, '/') . '(?![\w-])/', $segment)) {
+                continue;
+            }
+            if (!preg_match('/(?<![\w-])' . preg_quote($required, '/') . '(?![\w-])/', $segment)) {
+                $found[] = $background . ' needs ' . $required;
+            }
+        }
+        return $found;
+    }
+
+    /**
+     * Every badge must state the text colour its background requires.
+     *
+     * Rules 1 and 2 of the class docblock, plus the bg-*-subtle backgrounds of Bootstrap 5.3,
+     * which are light and pair with their text-*-emphasis colour.
      *
      * @return void
      */
@@ -111,7 +148,7 @@ final class badge_contrast_test extends \basic_testcase {
         $offenders = [];
         foreach ($this->markup_files() as $path) {
             foreach (file($path) as $number => $line) {
-                if ($this->is_comment_line($line) || !preg_match('/badge/i', $line)) {
+                if ($this->is_comment_line($line)) {
                     continue;
                 }
                 /*
@@ -121,34 +158,41 @@ final class badge_contrast_test extends \basic_testcase {
                 if (preg_match('/preg_(match|replace|split|quote)|new RegExp/', $line)) {
                     continue;
                 }
-                foreach ($this->required_text_colour() as $background => $required) {
-                    /*
-                     * Not preceded by "text-": Bootstrap 5.2's text-bg-* utility sets the
-                     * background and a contrasting colour, so it satisfies the rule on its own.
-                     */
-                    if (!preg_match('/(?<!text-)\b' . preg_quote($background, '/') . '\b(?!-subtle)/', $line)) {
-                        continue;
+                $where = basename($path) . ':' . ($number + 1);
+
+                // Rule 1: badge lines, checked per segment.
+                if (preg_match('/badge/i', $line)) {
+                    foreach (preg_split('/[\'"]|\{\{[#^\/][^}]*\}\}/', $line) as $segment) {
+                        foreach ($this->segment_offences($segment) as $offence) {
+                            $offenders[] = $where . ' ' . $offence;
+                        }
                     }
-                    if (!preg_match('/\btext-(white|dark|body|muted|bg-[a-z]+)\b/', $line)) {
-                        $offenders[] = basename($path) . ':' . ($number + 1) . ' needs ' . $required;
+                    /*
+                     * Bootstrap 5.3's bg-*-subtle backgrounds are light, so white badge text fails
+                     * on them as on bg-secondary; each pairs with its text-*-emphasis colour.
+                     */
+                    if (preg_match_all('/\bbg-([a-z]+)-subtle\b/', $line, $subtle)) {
+                        foreach ($subtle[1] as $hue) {
+                            $ok = '/\btext-(' . preg_quote($hue, '/') . '-emphasis|dark|body)\b/';
+                            if (!preg_match($ok, $line)) {
+                                $offenders[] = $where . ' bg-' . $hue . '-subtle needs text-' . $hue . '-emphasis';
+                            }
+                        }
                     }
                 }
-                /*
-                 * Bootstrap 5.3's bg-*-subtle backgrounds are light, so white badge text fails
-                 * on them as on bg-secondary; each pairs with its text-*-emphasis colour. The
-                 * (?!-subtle) lookahead above keeps them out of the saturated check.
-                 */
-                if (preg_match_all('/\bbg-([a-z]+)-subtle\b/', $line, $subtle)) {
-                    foreach ($subtle[1] as $hue) {
-                        $ok = '/\btext-(' . preg_quote($hue, '/') . '-emphasis|dark|body)\b/';
-                        if (!preg_match($ok, $line)) {
-                            $offenders[] = basename($path) . ':' . ($number + 1)
-                                . ' needs text-' . $hue . '-emphasis';
+
+                // Rule 2: class values that hold only bg-* and text-* tokens, wherever they are assembled.
+                $value = '/(?:=>|:|\?|\|\||\breturn)\s*([\'"])((?:bg|text)-[a-z-]+(?:\s+(?:bg|text)-[a-z-]+)*)\1/';
+                if (preg_match_all($value, $line, $values)) {
+                    foreach ($values[2] as $classes) {
+                        foreach ($this->segment_offences($classes) as $offence) {
+                            $offenders[] = $where . ' ' . $offence;
                         }
                     }
                 }
             }
         }
+        $offenders = array_values(array_unique($offenders));
         sort($offenders);
         $this->assertSame(
             [],

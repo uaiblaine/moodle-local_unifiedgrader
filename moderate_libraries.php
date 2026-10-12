@@ -18,7 +18,7 @@
  * Admin tool to audit and repair teachers' comment libraries.
  *
  * Dispatches on the `action` query parameter: list (default), view, recode,
- * reassign, purgemaps, importlegacy.
+ * reassign, purgemaps, importlegacy, deletecomments, importcsv, importbucket.
  *
  * @package    local_unifiedgrader
  * @copyright  2026 South African Theological Seminary (mathieu@sats.ac.za)
@@ -525,7 +525,7 @@ if (empty($activeflags)) {
     echo html_writer::start_div('d-flex gap-2 flex-wrap mb-3');
     foreach ($activeflags as $flag => $count) {
         echo html_writer::span(
-            get_string('clibmod_flag_' . $flag, 'local_unifiedgrader') . ': ' . $count,
+            library_audit::flag_label($flag) . ': ' . $count,
             'badge bg-warning text-dark p-2',
         );
     }
@@ -555,7 +555,7 @@ foreach ($inventory as $row) {
     if ($row['isuniversal']) {
         $codecell = html_writer::span(
             get_string('clibmod_universal', 'local_unifiedgrader'),
-            'badge bg-info text-dark',
+            'badge bg-info text-white',
         );
     } else {
         $codecell = html_writer::tag('code', '[' . s($row['coursecode']) . ']');
@@ -584,7 +584,7 @@ foreach ($inventory as $row) {
     $flagcell = '';
     foreach ($row['flags'] as $flag) {
         $flagcell .= html_writer::span(
-            get_string('clibmod_flag_' . $flag, 'local_unifiedgrader'),
+            library_audit::flag_label($flag),
             'badge bg-warning text-dark me-1 mb-1',
         );
     }
@@ -684,7 +684,7 @@ if (empty($legacy)) {
             $coursecell,
             $row['wouldbecode'] !== ''
                 ? html_writer::tag('code', s($row['wouldbecode']))
-                : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-dark'),
+                : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-white'),
             shorten_text(format_text($row['content'], FORMAT_PLAIN), 200),
             userdate($row['timecreated'], get_string('strftimedatetimeshort')),
         ];
@@ -732,7 +732,7 @@ if (empty($duplicates)) {
 
         $codecell = $group['coursecode'] !== ''
             ? html_writer::tag('code', s($group['coursecode']))
-            : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-dark');
+            : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-white');
 
         $ownername = $group['userid'] === 0
             ? get_string('clibmod_system_owner', 'local_unifiedgrader')

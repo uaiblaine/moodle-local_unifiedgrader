@@ -208,6 +208,9 @@ export const init = (containerId) => {
             gradesaving: false,
             // Set by saveGrade when the server refused the save it just ran.
             lastsavefailed: false,
+            // Set by saveGrade when the save it just ran failed on the network and
+            // went to SaveQueue: nothing is stored until the retry lands.
+            lastsavequeued: false,
             lastsaveerror: '',
             posting: false,
             gradesPosted: gradesPosted,
@@ -595,18 +598,23 @@ const _checkRecovery = async(container, reactive, cmid, userid) => {
  */
 const _restoreFromCache = (reactive, cached) => {
     for (const entry of cached) {
+        // The banner outlives a switch to another student; never restore one
+        // student's work into another's form.
+        if (entry.userid !== reactive.state?.currentUser?.id) {
+            continue;
+        }
         switch (entry.type) {
             case 'grade': {
-                const gradeInput = document.querySelector('[data-action="grade-input"]');
-                const scaleInput = document.querySelector('[data-action="scale-input"]');
-                if (gradeInput && entry.data?.value !== undefined) {
-                    gradeInput.value = entry.data.value;
-                    gradeInput.dispatchEvent(new Event('input'));
-                } else if (scaleInput && entry.data?.value !== undefined) {
-                    scaleInput.value = entry.data.value;
-                    scaleInput.dispatchEvent(new Event('change'));
-                }
-                DirtyTracker.markDirty('grade');
+                // The marking panel restores the criteria with the grade box: a
+                // restored total next to the criteria loaded from the server would
+                // be saved as an override of criteria nobody chose.
+                document.dispatchEvent(new CustomEvent('unifiedgrader:restoregrade', {
+                    detail: {
+                        userid: entry.userid,
+                        value: entry.data?.value,
+                        advancedGradingData: entry.data?.advancedGradingData || '',
+                    },
+                }));
                 break;
             }
             case 'feedback': {

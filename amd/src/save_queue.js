@@ -44,6 +44,7 @@ const MAX_RETRIES = 5;
  * @property {number} retryCount Number of retries attempted.
  * @property {number} nextRetryAt Timestamp (ms) of next retry.
  * @property {string} sesskey Session key at time of enqueue.
+ * @property {string|null} key What the payload saves (e.g. one student's grade), or null.
  */
 
 /** @type {QueueEntry[]} Pending save operations. */
@@ -99,6 +100,27 @@ const _getSesskey = () => {
  * @return {boolean}
  */
 const _isOnline = () => _browserOnline && _serverReachable;
+
+/**
+ * Remove the queued entries of a type and key.
+ *
+ * An entry whose retry is already running finishes; it is no longer in the
+ * queue, so it is neither retried again nor counted.
+ *
+ * @param {string} type Operation type label.
+ * @param {string} key What the payload saves.
+ * @return {boolean} Whether any entry was removed.
+ */
+const _removeEntries = (type, key) => {
+    let removed = false;
+    for (let i = _queue.length - 1; i >= 0; i--) {
+        if (_queue[i].type === type && _queue[i].key === key) {
+            _queue.splice(i, 1);
+            removed = true;
+        }
+    }
+    return removed;
+};
 
 /**
  * Notify all status change listeners.
@@ -252,14 +274,22 @@ const _handleOffline = () => {
 /**
  * Enqueue a failed save operation for retry.
  *
+ * An entry with a key replaces a queued entry of the same type and key: the
+ * newer payload is the whole of what that key saves, and replaying the older one
+ * after it would put stale data back.
+ *
  * @param {string} type Operation type label (e.g. 'saveGrade', 'saveAnnotations').
  * @param {Function} saveFn Async function that performs the save. Called with no arguments.
  * @param {Function} [onSuccessFn] Optional callback invoked after a successful retry.
+ * @param {string|null} [key] What the payload saves, for replacing and discarding entries.
  */
-export const enqueue = (type, saveFn, onSuccessFn) => {
+export const enqueue = (type, saveFn, onSuccessFn, key = null) => {
     // Mark server as unreachable since a save just failed.
     _serverReachable = false;
 
+    if (key !== null) {
+        _removeEntries(type, key);
+    }
     _queue.push({
         id: _makeId(type),
         type,
@@ -268,9 +298,25 @@ export const enqueue = (type, saveFn, onSuccessFn) => {
         retryCount: 0,
         nextRetryAt: Date.now() + BACKOFF_SCHEDULE[0],
         sesskey: _getSesskey(),
+        key,
     });
     window.console.info('[save_queue] Enqueued:', type, '(queue size:', _queue.length + ')');
     _notifyListeners();
+};
+
+/**
+ * Drop the queued entries of a type and key.
+ *
+ * For a payload the server has since stored by another route: a later save
+ * of the same key carried newer data, which a replay would overwrite.
+ *
+ * @param {string} type Operation type label.
+ * @param {string} key What the payload saves.
+ */
+export const discard = (type, key) => {
+    if (_removeEntries(type, key)) {
+        _notifyListeners();
+    }
 };
 
 /**

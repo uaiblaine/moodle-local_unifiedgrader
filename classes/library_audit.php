@@ -75,6 +75,28 @@ class library_audit {
     }
 
     /**
+     * Human-readable label of an anomaly flag.
+     *
+     * One literal get_string() per flag keeps every id visible to the string checker.
+     *
+     * @param string $flag One of the FLAG_* constants.
+     * @return string
+     * @throws \coding_exception For a flag with no label.
+     */
+    public static function flag_label(string $flag): string {
+        return match ($flag) {
+            self::FLAG_NO_OWNER => get_string('clibmod_flag_noowner', 'local_unifiedgrader'),
+            self::FLAG_DELETED_OWNER => get_string('clibmod_flag_deletedowner', 'local_unifiedgrader'),
+            self::FLAG_SYSTEM_WITH_CODE => get_string('clibmod_flag_systemwithcode', 'local_unifiedgrader'),
+            self::FLAG_SENTINEL_CODE => get_string('clibmod_flag_sentinelcode', 'local_unifiedgrader'),
+            self::FLAG_PADDED_CODE => get_string('clibmod_flag_paddedcode', 'local_unifiedgrader'),
+            self::FLAG_UNKNOWN_CODE => get_string('clibmod_flag_unknowncode', 'local_unifiedgrader'),
+            self::FLAG_VARIANT_CODE => get_string('clibmod_flag_variantcode', 'local_unifiedgrader'),
+            default => throw new \coding_exception('Unknown library anomaly flag: ' . $flag),
+        };
+    }
+
+    /**
      * Normalise a course code for comparison: trim, collapse case.
      *
      * Used to decide whether two stored codes are "the same code, typed
@@ -130,6 +152,33 @@ class library_audit {
         }
 
         return $map;
+    }
+
+    /**
+     * Course codes of the courses a user can grade in.
+     *
+     * The self-service recode form offers these as targets, and a comment moved to a code
+     * the teacher cannot grade under would just be unreachable for them. Being enrolled is
+     * not enough (a teacher may only be a student in a course), so each active enrolment is
+     * checked for local/unifiedgrader:grade in the course context. A role assigned only on
+     * an individual activity does not count here.
+     *
+     * @param int $userid The teacher.
+     * @return string[] Distinct non-empty codes, in course shortname order.
+     */
+    public static function get_gradable_codes(int $userid): array {
+        $codes = [];
+        $courses = enrol_get_users_courses($userid, true, ['shortname'], 'shortname ASC');
+        foreach ($courses as $course) {
+            if (!has_capability('local/unifiedgrader:grade', \context_course::instance($course->id), $userid)) {
+                continue;
+            }
+            $code = course_code_helper::extract_code($course->shortname);
+            if (trim($code) !== '' && !in_array($code, $codes, true)) {
+                $codes[] = $code;
+            }
+        }
+        return $codes;
     }
 
     /**
@@ -508,6 +557,21 @@ class library_audit {
     }
 
     // Repair operations.
+
+    /**
+     * Whether a teacher may re-scope their own comments to a code.
+     *
+     * The universal (empty) code is always allowed. Any other code must be one of the codes of courses the
+     * teacher can grade in, which is what the recode form offers; the page enforces it here as well,
+     * because the form is only a convenience.
+     *
+     * @param int $userid The teacher.
+     * @param string $code The code to write.
+     * @return bool
+     */
+    public static function is_offerable_code(int $userid, string $code): bool {
+        return $code === '' || in_array($code, self::get_gradable_codes($userid), true);
+    }
 
     /**
      * Re-scope comments to a different course code.

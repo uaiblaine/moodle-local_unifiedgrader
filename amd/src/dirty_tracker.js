@@ -25,6 +25,8 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+import * as SaveQueue from 'local_unifiedgrader/save_queue';
+
 /** @type {Object<string, boolean>} Dirty flags per data type. */
 const _dirtyFlags = {
     grade: false,
@@ -159,14 +161,16 @@ export const resetAll = () => {
 
 /**
  * Install the global beforeunload handler.
- * Shows the browser's native "Leave site?" dialog when any data type is dirty.
+ * Shows the browser's native "Leave site?" dialog when any data type is dirty,
+ * or while SaveQueue holds a save waiting for its retry: the queue lives in
+ * this page only, so leaving drops it.
  */
 export const install = () => {
     if (_beforeUnloadHandler) {
         return;
     }
     _beforeUnloadHandler = (e) => {
-        if (isDirty()) {
+        if (isDirty() || SaveQueue.getQueueLength() > 0) {
             e.preventDefault();
             e.returnValue = '';
         }

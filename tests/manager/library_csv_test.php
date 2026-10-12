@@ -526,6 +526,69 @@ final class library_csv_test extends \advanced_testcase {
     }
 
     /**
+     * A formula hidden behind leading whitespace is quoted, and import removes that quote again.
+     *
+     * Core's \core\dataformat::escape_spreadsheet_formula() tests the first character after the
+     * whitespace; this export must not be weaker. Import trims the content it stores.
+     */
+    public function test_formula_after_leading_whitespace_is_quoted_and_restored(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $owner = $generator->create_user();
+        $restored = $generator->create_user();
+
+        $plugingen->create_library_comment(['userid' => $owner->id, 'coursecode' => 'C0', 'content' => ' =1+1']);
+        $plugingen->create_library_comment(['userid' => $owner->id, 'coursecode' => 'C1', 'content' => "  \t@SUM(1,1)"]);
+        $plugingen->create_library_comment(['userid' => $owner->id, 'coursecode' => 'C2', 'content' => ' Plain text']);
+
+        $csv = library_csv::export_for_owner($owner->id);
+        $bycode = [];
+        foreach ($this->parse($csv) as $row) {
+            $bycode[$row['coursecode']] = $row['content'];
+        }
+        $this->assertSame("' =1+1", $bycode['C0']);
+        $this->assertSame("'  \t@SUM(1,1)", $bycode['C1']);
+        $this->assertSame(' Plain text', $bycode['C2']);
+
+        library_csv::import($csv, $restored->id);
+        $imported = array_map(fn($r) => $r->content, $DB->get_records('local_unifiedgrader_clib', ['userid' => $restored->id]));
+        sort($imported);
+        $this->assertSame(['=1+1', '@SUM(1,1)', 'Plain text'], $imported);
+    }
+
+    /**
+     * The download form starts with exactly one byte order mark and still imports unchanged.
+     */
+    public function test_download_form_has_one_bom_and_round_trips(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+        $plugingen = $generator->get_plugin_generator('local_unifiedgrader');
+        $owner = $generator->create_user();
+        $restored = $generator->create_user();
+        $plugingen->create_library_comment([
+            'userid' => $owner->id,
+            'coursecode' => 'BIB3129',
+            'content' => 'Excelente argumentação',
+        ]);
+
+        $csv = library_csv::export_for_owner($owner->id);
+        $download = library_csv::with_bom($csv);
+
+        $this->assertStringStartsWith(\core_text::UTF8_BOM . 'coursecode', $download);
+        $this->assertSame($download, library_csv::with_bom($download));
+
+        $result = library_csv::import($download, $restored->id);
+        $this->assertSame(1, $result['imported']);
+        $this->assertSame([], $result['errors']);
+        $rec = $DB->get_record('local_unifiedgrader_clib', ['userid' => $restored->id], '*', MUST_EXIST);
+        $this->assertSame('BIB3129', $rec->coursecode);
+        $this->assertSame('Excelente argumentação', $rec->content);
+    }
+
+    /**
      * A filtered moderation-page import never lets an ownerid column override the filter.
      */
     public function test_allow_owner_column_for_filter(): void {

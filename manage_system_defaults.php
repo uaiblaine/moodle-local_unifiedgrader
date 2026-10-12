@@ -18,7 +18,8 @@
  * Admin tool to curate system-default tags and comments in the comment library.
  *
  * The page is a single controller that dispatches on the `action` query
- * parameter: list (default), edittag, deletetag, editcomment, deletecomment.
+ * parameter: list (default), edittag, deletetag, editcomment, deletecomment,
+ * approveproposal, rejectproposal.
  *
  * @package    local_unifiedgrader
  * @copyright  2026 South African Theological Seminary (mathieu@sats.ac.za)

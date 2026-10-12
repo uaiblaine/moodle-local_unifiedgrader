@@ -22,16 +22,14 @@ Feature: Manual grade override locks against subsequent rubric edits
       | assign   | Essay 1 | TC101  | a1       | 20    |
     And I log in as "teacher1"
 
-  Scenario: Typing a value in the grade input survives a rubric score edit
+  Scenario: A grade typed with no grading form survives a page reload
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
-    # The rubric isn't set up in this stub — UG works fine without one.
-    # When a rubric IS attached we'd seed a rubric scenario in the Given.
     And I enter "18" as the overall grade
     Then the overall grade shows "18"
-    # After a page reload the override persists (assumes autosave fired
-    # on focusout). The override badge should also be visible because the
-    # displayed grade differs from any rubric-computed total.
+    # The grade step blurs the input, which fires the focus-out autosave, so
+    # the reload reads the grade back from the server. The override badge is
+    # only shown beside a grading form; the next scenario asserts it.
     When I reload the page
     And the marking panel has loaded
     Then the overall grade shows "18"

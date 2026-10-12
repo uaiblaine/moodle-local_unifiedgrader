@@ -106,6 +106,55 @@ final class library_audit_test extends \advanced_testcase {
     }
 
     /**
+     * Only codes of courses the user can grade in are offered, not those they merely study in.
+     */
+    public function test_gradable_codes_exclude_courses_the_user_only_studies_in(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $taught = $generator->create_course(['shortname' => 'BIB3127']);
+        $studied = $generator->create_course(['shortname' => 'BIB3129']);
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $taught->id, 'editingteacher');
+        $generator->enrol_user($user->id, $studied->id, 'student');
+
+        $this->assertSame(['BIB3127'], library_audit::get_gradable_codes((int) $user->id));
+    }
+
+    /**
+     * The server refuses a code the recode form would not have offered; the universal code stays allowed.
+     */
+    public function test_is_offerable_code_matches_the_gradable_codes(): void {
+        $this->resetAfterTest();
+        $generator = $this->getDataGenerator();
+
+        $taught = $generator->create_course(['shortname' => 'BIB3127']);
+        $studied = $generator->create_course(['shortname' => 'BIB3129']);
+        $user = $generator->create_user();
+        $generator->enrol_user($user->id, $taught->id, 'editingteacher');
+        $generator->enrol_user($user->id, $studied->id, 'student');
+
+        $this->assertTrue(library_audit::is_offerable_code((int) $user->id, 'BIB3127'));
+        $this->assertTrue(library_audit::is_offerable_code((int) $user->id, ''));
+        $this->assertFalse(library_audit::is_offerable_code((int) $user->id, 'BIB3129'));
+        $this->assertFalse(library_audit::is_offerable_code((int) $user->id, 'ZZZ0000'));
+    }
+
+    /**
+     * Every anomaly flag has a label, and an unknown flag is rejected rather than shown as a missing string.
+     */
+    public function test_every_flag_has_a_label(): void {
+        foreach (library_audit::all_flags() as $flag) {
+            $this->assertSame(
+                get_string('clibmod_flag_' . $flag, 'local_unifiedgrader'),
+                library_audit::flag_label($flag),
+            );
+        }
+        $this->expectException(\coding_exception::class);
+        library_audit::flag_label('nosuchflag');
+    }
+
+    /**
      * A sentinel leaked from the modal sidebar is flagged and short-circuits
      * the other code checks.
      */
