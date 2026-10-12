@@ -1106,8 +1106,10 @@ class forum_adapter extends base_adapter {
     /**
      * Check whether a forum grade has been released to the student.
      *
-     * A forum grade is considered released when a forum_grades record exists
-     * with a non-null grade AND the gradebook item is not hidden.
+     * A forum grade is considered released when there is something to show
+     * (a rating, a forum_grades record with a non-null grade, or feedback for a
+     * forum graded "None") AND neither the gradebook item nor the student's own
+     * grade is hidden.
      *
      * @param int $userid
      * @return bool
@@ -1158,10 +1160,18 @@ class forum_adapter extends base_adapter {
             }
         }
 
-        // Check the gradebook item is not hidden.
+        // Check neither the gradebook item nor the student's own grade is hidden:
+        // the teacher can hide one student's grade, or hide it until a date,
+        // while the item stays visible.
         $gradeitem = $this->fetch_grade_item();
         if ($gradeitem && $gradeitem->is_hidden()) {
             return false;
+        }
+        if ($gradeitem) {
+            $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
+            if ($gradegrade && $gradegrade->is_hidden()) {
+                return false;
+            }
         }
 
         return true;
@@ -2044,6 +2054,7 @@ SCRIPT;
                 $definition->rubric_criteria,
             );
             $result['isranged'] = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method);
+            $result['lockzeropoints'] = \local_unifiedgrader\grading_method_helper::rubric_lockzeropoints($controller);
             $result['areaid'] = (int) $controller->get_areaid();
             $result['pdfurl'] = \local_unifiedgrader\grading_method_helper::get_pdf_url(
                 $method,

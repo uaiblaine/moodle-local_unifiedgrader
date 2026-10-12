@@ -390,4 +390,49 @@ final class forum_adapter_test extends \advanced_testcase {
         $this->assertStringContainsString('feedback.mp4', $data['feedback']);
         $this->assertStringNotContainsString('@@PLUGINFILE@@', $data['feedback']);
     }
+
+    /**
+     * A null grade clears the whole-forum mark even when it comes with filled guide criteria.
+     *
+     * The grader sends the criteria on every save once the forum has a guide, so an
+     * emptied grade box or a typed "-" arrives as a null grade with the guide still
+     * scored. The teacher asked for no grade, so the guide must not compute one.
+     * assign_adapter_test::test_null_grade_with_guide_criteria_clears_the_mark pins
+     * the same rule for assignments, so one input gives one result in both.
+     */
+    public function test_null_grade_with_guide_criteria_clears_the_mark(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+        $context = \context_module::instance($s->scenario->cm->id);
+        $this->getDataGenerator()->get_plugin_generator('gradingform_guide')->create_instance(
+            $context,
+            'mod_forum',
+            'forum',
+            'Guide',
+            '',
+            ['Argument' => ['description' => 'Argument', 'descriptionmarkers' => 'Argument', 'maxscore' => 10]],
+        );
+        $controller = get_grading_manager($context, 'mod_forum', 'forum')->get_active_controller();
+        $this->assertNotEmpty($controller, 'Precondition: the guide is the active grading method.');
+        $criterionid = (int) array_key_first($controller->get_definition()->guide_criteria);
+        $criteria = ['criteria' => [$criterionid => ['score' => '7', 'remark' => '']]];
+
+        $adapter = adapter_factory::create($s->scenario->cm->id);
+        $adapter->save_grade($student->id, 70.0, '', FORMAT_HTML, $criteria);
+        $this->assertEqualsWithDelta(
+            70.0,
+            $adapter->get_grade_data($student->id)['grade'],
+            0.01,
+            'Precondition: the guide graded the student.'
+        );
+
+        $this->assertTrue($adapter->save_grade($student->id, null, '', FORMAT_HTML, $criteria));
+
+        $this->assertNull(
+            adapter_factory::create($s->scenario->cm->id)->get_grade_data($student->id)['grade'],
+            'A null grade must clear the mark, not have the guide recompute it.'
+        );
+    }
 }

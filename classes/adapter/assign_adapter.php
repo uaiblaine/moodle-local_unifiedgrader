@@ -672,15 +672,24 @@ class assign_adapter extends base_adapter {
         // recoverable case (overridden, not locked) automatically by clearing
         // the override — that mirrors what a teacher would do in the gradebook
         // UI before re-grading; the penalty subsystem re-applies afterwards.
-        // Run it whenever we are about to write a grade value — by plain input
-        // ($grade) or via advanced grading ($advancedgradingdata) — but not for
-        // a pure "no grade" clear, which must not silently lift a penalty.
+        // Run it whenever we are about to write a grade value, but not for a
+        // "no grade" clear, which must not silently lift a penalty.
         // Hard-block (locked) still surfaces a clear error so the teacher knows
         // to deal with it explicitly.
         //
-        // A pure clear is refused by the first branch below instead: it must
-        // not lift the override, and it must not report success either.
-        if (($grade === null && empty($advancedgradingdata)) && $this->assign->grading_disabled($userid)) {
+        // A null grade is a clear whatever criteria data comes with it (see the
+        // save_grade_directly() cases below), so it is refused by the second
+        // branch below instead: it must not lift the override, and it must not
+        // report success either.
+        //
+        // grading_disabled() is also true when marking workflow puts the
+        // submission in a state this grader may not set. No gradebook change
+        // lifts that, so it is refused first, with its own message, and both a
+        // grade and a clear honour it.
+        if ($this->grading_blocked_by_workflow($userid)) {
+            throw new \moodle_exception('error_grade_blocked_by_workflow', 'local_unifiedgrader');
+        }
+        if ($grade === null && $this->assign->grading_disabled($userid)) {
             /*
              * While grading_disabled() is true, core's apply_grade_to_user()
              * skips the write, so the previous mark would survive a save that
@@ -702,7 +711,7 @@ class assign_adapter extends base_adapter {
                 'local_unifiedgrader',
             );
         }
-        if (($grade !== null || !empty($advancedgradingdata)) && $this->assign->grading_disabled($userid)) {
+        if ($grade !== null && $this->assign->grading_disabled($userid)) {
             $cleared = $this->clear_recoverable_gradebook_block($userid);
             // Re-checking via $this->assign->grading_disabled() would call
             // grade_get_grades() again, which reads from grade_item::fetch_all()
@@ -739,17 +748,20 @@ class assign_adapter extends base_adapter {
          *    isset($formdata->grade), and isset() is false for null, so the
          *    clear was silently dropped and the previous mark stayed put. The
          *    direct path stores mod_assign's own -1 sentinel instead.
-         *    forum_adapter has always taken the direct path for null; assign
-         *    never did.
+         *    forum_adapter::save_grade() treats null the same way.
          *
-         *    Only without criteria data: save_grade_directly() never touches
-         *    the grading controller, so a null grade sent with filled criteria
-         *    (numeric box empty, guide scored) takes the normal path, where the
-         *    grading instance computes the grade.
+         *    Criteria data does not change that. The grader sends the
+         *    criteria with every save once the activity has a rubric or guide,
+         *    blank or not, so a null grade with criteria is what an emptied
+         *    grade box or a typed "-" looks like; sending it through the
+         *    grading instance would recompute a mark instead of clearing it.
+         *    Without an active grading method the criteria have nothing to
+         *    feed, and assign::save_grade() would store nothing and report
+         *    success. The criteria fill stays as last saved.
          */
         $gradingdisabled = ((int) $instance->grade === 0);
         if (
-            ($grade === null && empty($advancedgradingdata))
+            $grade === null
             || ($controller && empty($advancedgradingdata))
             || $gradingdisabled
         ) {
@@ -766,8 +778,7 @@ class assign_adapter extends base_adapter {
         }
 
         $data = new \stdClass();
-        // Null reaches here only with criteria data, which sets the grade; an
-        // "ungrade me" without it went to save_grade_directly() above.
+        // Null never reaches here: a clear went to save_grade_directly() above.
         $data->grade = $grade;
         $data->attemptnumber = $attemptnumber;
         $editordata = [
@@ -810,7 +821,11 @@ class assign_adapter extends base_adapter {
                 && get_config('local_unifiedgrader', 'allow_manual_grade_override')
         ) {
             $gradeobj = $this->assign->get_user_grade($userid, false, $attemptnumber);
-            if ($gradeobj && (float) $gradeobj->grade !== $grade) {
+            // The client sends the total as displayed, rounded to the grade item's decimals, while core stores the
+            // unrounded rubric grade (33.33333). A value within half a display unit of the stored one is the
+            // untouched auto-filled total, not an override, so it must not replace core's grade.
+            $tolerance = 0.5 / (10 ** $this->assign->get_grade_item()->get_decimals());
+            if ($gradeobj && abs((float) $gradeobj->grade - $grade) >= $tolerance) {
                 $gradeobj->grade = $grade;
                 $gradeobj->timemodified = time();
                 $DB->update_record('assign_grades', $gradeobj);
@@ -862,12 +877,29 @@ class assign_adapter extends base_adapter {
      *     submission — i.e. its status is not 'submitted'. A genuine
      *     'submitted' row is left alone.
      *
+     * Reverting the submission needs mod/assign:editothersubmission, which core
+     * grants to no archetype. Without it the grade is still cleared, the row and
+     * its plugin data stay, and the call returns false so the caller can say so.
+     *
      * @param int $userid
-     * @return bool
+     * @return bool False when the grade was cleared but the submission had to be kept.
+     * @throws \moodle_exception When marking workflow keeps this grader from changing the grade.
      */
     public function reset_grade_and_submission(int $userid): bool {
         global $DB, $USER, $CFG;
         require_once($CFG->dirroot . '/mod/assign/locallib.php');
+
+        // The reset writes assign_grades itself, past the workflow check in
+        // core's apply_grade_to_user(), so it applies the check save_grade()
+        // applies before writing anything.
+        if ($this->grading_blocked_by_workflow($userid)) {
+            throw new \moodle_exception('error_grade_blocked_by_workflow', 'local_unifiedgrader');
+        }
+
+        // Read before get_user_grade(): with the latest attempt asked for, core
+        // creates an empty submission row even when told not to create a grade.
+        // That row holds nothing, so only one that was here before is reverted.
+        $submission = $this->get_submission($userid);
 
         // Clear the grade and push -1 through to the gradebook.
         $gradeobj = $this->assign->get_user_grade($userid, false);
@@ -891,12 +923,27 @@ class assign_adapter extends base_adapter {
         // Wipe the submission only when it isn't a real student submission.
         // remove_submission() resets status to 'new'/'reopened' and tells each
         // submission plugin to drop its data — it does not delete the row.
-        $submission = $this->get_submission($userid);
         if ($submission && $submission->status !== ASSIGN_SUBMISSION_STATUS_SUBMITTED) {
-            $this->assign->remove_submission($userid);
+            return $this->assign->remove_submission($userid);
         }
 
         return true;
+    }
+
+    /**
+     * Whether marking workflow keeps the current user from changing this student's grade.
+     *
+     * Core's grading_disabled() tests the workflow state first and then the
+     * gradebook entry in the grading info it is given. Handing it a grading info
+     * with no entry for the user leaves only the workflow half, so this stays in
+     * step with core's own rule, which differs between Moodle branches, instead
+     * of copying it.
+     *
+     * @param int $userid Student user id.
+     * @return bool
+     */
+    private function grading_blocked_by_workflow(int $userid): bool {
+        return $this->assign->grading_disabled($userid, true, new \stdClass());
     }
 
     /**
@@ -1255,7 +1302,17 @@ class assign_adapter extends base_adapter {
             return false;
         }
 
-        // 3. If marking workflow is enabled, require state = RELEASED.
+        // 3. Check the student's own gradebook grade is not hidden. The teacher can
+        // hide one student's grade, or hide it until a date, with the item visible;
+        // core's assignment page then withholds that student's grade too.
+        if ($gradeitem) {
+            $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
+            if ($gradegrade && $gradegrade->is_hidden()) {
+                return false;
+            }
+        }
+
+        // 4. If marking workflow is enabled, require state = RELEASED.
         if (!empty($instance->markingworkflow)) {
             $workflowstate = $this->assign->get_user_flags($userid, false);
             if (!$workflowstate || $workflowstate->workflowstate !== ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
@@ -1943,12 +2000,6 @@ class assign_adapter extends base_adapter {
     }
 
     /**
-     * Get the online text submission content.
-     *
-     * @param \stdClass $submission
-     * @return string
-     */
-    /**
      * Get the submission for a user, handling both individual and group submissions.
      *
      * When team submission is enabled, the submission is stored with userid=0
@@ -2267,6 +2318,7 @@ class assign_adapter extends base_adapter {
                 $definition->rubric_criteria,
             );
             $result['isranged'] = \local_unifiedgrader\grading_method_helper::is_ranged_rubric($method);
+            $result['lockzeropoints'] = \local_unifiedgrader\grading_method_helper::rubric_lockzeropoints($controller);
             $result['areaid'] = (int) $controller->get_areaid();
             $result['pdfurl'] = \local_unifiedgrader\grading_method_helper::get_pdf_url(
                 $method,

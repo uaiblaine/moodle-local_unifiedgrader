@@ -757,13 +757,14 @@ const _editForm = (comment) => {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'badge rounded-pill '
-            + (isActive ? 'bg-primary' : 'bg-light text-dark border');
+            + (isActive ? 'bg-primary text-white' : 'bg-light text-dark border');
         chip.textContent = tag.name;
         chip.dataset.tagid = tag.id;
         chip.addEventListener('click', () => {
             chip.classList.toggle('bg-primary');
             chip.classList.toggle('bg-light');
             chip.classList.toggle('text-dark');
+            chip.classList.toggle('text-white');
             chip.classList.toggle('border');
         });
         tagRow.appendChild(chip);
@@ -947,7 +948,7 @@ const _renderNewFormTagChips = () => {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'badge rounded-pill '
-            + (isActive ? 'bg-primary' : 'bg-light text-dark border');
+            + (isActive ? 'bg-primary text-white' : 'bg-light text-dark border');
         chip.style.fontSize = '0.7rem';
         chip.style.cursor = 'pointer';
         chip.textContent = tag.name;
@@ -1323,7 +1324,7 @@ const _showTagManager = () => {
             btns.appendChild(delTagBtn);
         } else {
             const sysLabel = document.createElement('span');
-            sysLabel.className = 'badge bg-light text-muted border';
+            sysLabel.className = 'badge bg-light text-dark border';
             sysLabel.style.fontSize = '0.6rem';
             sysLabel.textContent = 'System';
             getString('clib_system_tag', 'local_unifiedgrader').then((s) => {

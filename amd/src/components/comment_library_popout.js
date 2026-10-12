@@ -396,7 +396,7 @@ export default class CommentLibraryPopout {
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'badge rounded-pill '
-            + (tagid === this._activeTagId ? 'bg-primary' : 'bg-light text-dark border');
+            + (tagid === this._activeTagId ? 'bg-primary text-white' : 'bg-light text-dark border');
         chip.textContent = label;
         chip.addEventListener('click', () => {
             this._activeTagId = tagid;

@@ -56,6 +56,16 @@ if ($action === 'recode') {
     $commentids = optional_param_array('commentids', [], PARAM_INT);
     $newcode = trim(optional_param('newcode', '', PARAM_TEXT));
 
+    // The form only offers the codes of courses the teacher can grade in; hold the server to the same promise.
+    if (!library_audit::is_offerable_code((int) $USER->id, $newcode)) {
+        redirect(
+            $baseurl,
+            get_string('clibmod_code_not_gradable', 'local_unifiedgrader'),
+            null,
+            \core\output\notification::NOTIFY_ERROR,
+        );
+    }
+
     // The owner argument is what confines this to the teacher's own rows.
     try {
         $changed = library_audit::recode_comments($commentids, $newcode, $USER->id);
@@ -209,7 +219,7 @@ $overview->data = [];
 
 foreach ($inventory as $row) {
     $codecell = $row['isuniversal']
-        ? html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-dark')
+        ? html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-white')
         : html_writer::tag('code', s($row['coursecode']));
 
     $coursecell = '';
@@ -262,7 +272,7 @@ if (!empty($duplicates)) {
 
         $codecell = $group['coursecode'] !== ''
             ? html_writer::tag('code', s($group['coursecode']))
-            : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-dark');
+            : html_writer::span(get_string('clibmod_universal', 'local_unifiedgrader'), 'badge bg-info text-white');
 
         $viewurl = new moodle_url($baseurl, ['action' => 'view', 'code' => $group['coursecode']]);
 
@@ -354,18 +364,11 @@ foreach ($comments as $comment) {
 }
 echo html_writer::table($table);
 
-// Only offer codes for courses this teacher can actually grade in — the
-// admin tool offers every code on the site, but a teacher moving comments
-// into a course they don't teach would just lose them again.
+// Only offer codes for courses this teacher can actually grade in (the admin
+// tool offers every code on the site): a comment moved into a course they
+// only study in would just be unreachable for them.
 $datalist = '';
-$mycourses = enrol_get_my_courses(['id', 'shortname'], 'shortname ASC');
-$offered = [];
-foreach ($mycourses as $course) {
-    $mycode = \local_unifiedgrader\course_code_helper::extract_code($course->shortname);
-    if (trim($mycode) === '' || isset($offered[$mycode])) {
-        continue;
-    }
-    $offered[$mycode] = true;
+foreach (library_audit::get_gradable_codes((int) $USER->id) as $mycode) {
     $datalist .= html_writer::empty_tag('option', ['value' => $mycode]);
 }
 echo html_writer::tag('datalist', $datalist, ['id' => 'mylib-known-codes']);

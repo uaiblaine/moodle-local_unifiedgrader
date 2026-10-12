@@ -78,6 +78,29 @@ class grading_method_helper {
     }
 
     /**
+     * Whether a rubric scales its score from zero (its "lockzeropoints" option).
+     *
+     * gradingform_rubric_instance::get_grade() turns the score into a grade as
+     * score / maxscore when the option is on, and as
+     * (score - minscore) / (maxscore - minscore) when it is off. The marking
+     * panel computes the same grade in the browser, so the adapters ship the
+     * option with the rubric definition. gradingform_rubric_controller::get_options()
+     * already reads a rubric created before Moodle 3.2 as off. A controller with
+     * no such option reports on: the grade then scales from zero.
+     *
+     * @param \gradingform_controller $controller The rubric's controller.
+     * @return bool
+     */
+    public static function rubric_lockzeropoints(\gradingform_controller $controller): bool {
+        if (!method_exists($controller, 'get_options')) {
+            return true;
+        }
+        $options = $controller->get_options();
+        return !is_array($options) || !array_key_exists('lockzeropoints', $options)
+            || !empty($options['lockzeropoints']);
+    }
+
+    /**
      * Annotate serialised rubric criteria with ranged-rubric data.
      *
      * For a ranged criterion the teacher picks a level *and* enters a score

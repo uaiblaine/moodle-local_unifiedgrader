@@ -698,9 +698,11 @@ final class integration_test extends \advanced_testcase {
     }
 
     /**
-     * Test that the settings navigation function does not crash.
+     * The settings navigation hook adds the grading node right after "Edit settings".
+     *
+     * The position is what keeps the tab inside the secondary navigation's visible slots.
      */
-    public function test_settings_navigation_no_crash(): void {
+    public function test_settings_navigation_places_grade_node_after_edit_settings(): void {
         global $PAGE;
 
         $scenario = $this->gen->create_grading_scenario('assign', [
@@ -714,17 +716,33 @@ final class integration_test extends \advanced_testcase {
         $PAGE = new \moodle_page();
 
         $this->setUser($scenario->teacher);
-        $PAGE->set_cm($scenario->cm);
+        // The scenario's cm_info was built for the user who created it; core adds
+        // "Edit settings" only when the cm is visible to the user it was built for.
+        $PAGE->set_cm(get_fast_modinfo($scenario->course, (int) $scenario->teacher->id)->get_cm((int) $scenario->cm->id));
         $PAGE->set_context($context);
         $PAGE->set_url(new \moodle_url('/mod/assign/view.php', ['id' => $scenario->cm->id]));
 
+        // Initialising the settings tree runs every plugin's
+        // extend_settings_navigation callback, this plugin's included.
         $settingsnav = new \settings_navigation($PAGE);
         $settingsnav->initialise();
 
-        // The function should not throw.
-        \local_unifiedgrader_extend_settings_navigation($settingsnav, $context);
+        $modulesettings = $settingsnav->find('modulesettings', \navigation_node::TYPE_SETTING);
+        $this->assertNotEmpty($modulesettings);
+        // The control: without "Edit settings" there is no position to assert.
+        $this->assertContains('modedit', $modulesettings->get_children_key_list());
 
-        // If we get here without exception, the dead code removal didn't break anything.
-        $this->assertTrue(true);
+        $node = $settingsnav->find('local_unifiedgrader_grade', \navigation_node::TYPE_CUSTOM);
+        $this->assertNotEmpty($node, 'The Unified Grader node was not added.');
+        $this->assertSame(
+            (new \moodle_url('/local/unifiedgrader/grade.php', ['cmid' => (int) $scenario->cm->id]))->out(false),
+            $node->action->out(false)
+        );
+        $keys = $modulesettings->get_children_key_list();
+        $this->assertSame(
+            array_search('modedit', $keys) + 1,
+            array_search('local_unifiedgrader_grade', $keys),
+            'The node must follow "Edit settings": ' . implode(', ', $keys)
+        );
     }
 }

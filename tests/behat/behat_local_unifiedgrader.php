@@ -186,19 +186,6 @@ class behat_local_unifiedgrader extends behat_base {
      * @param TableNode $criteria Rows of shortname + maxscore.
      */
     public function a_marking_guide_is_attached_to(string $activity, TableNode $criteria): void {
-        global $DB;
-        $cm = $DB->get_record_sql(
-            "SELECT cm.id
-               FROM {course_modules} cm
-               JOIN {modules} m ON m.id = cm.module AND m.name = 'assign'
-               JOIN {assign} a ON a.id = cm.instance
-              WHERE a.name = :name",
-            ['name' => $activity],
-        );
-        if (!$cm) {
-            throw new Exception("No assignment named '{$activity}' found");
-        }
-
         $definition = [];
         foreach ($criteria->getHash() as $row) {
             $definition[$row['shortname']] = [
@@ -213,7 +200,7 @@ class behat_local_unifiedgrader extends behat_base {
 
         $generator = \testing_util::get_data_generator()->get_plugin_generator('gradingform_guide');
         $generator->create_instance(
-            \context_module::instance((int) $cm->id),
+            \context_module::instance($this->assign_cmid($activity)),
             'mod_assign',
             'submissions',
             $activity . ' guide',
@@ -618,10 +605,10 @@ class behat_local_unifiedgrader extends behat_base {
      * propagation race silently no-ops the dispatch (the exact regression
      * v2.5.1 + v2.5.2 chased).
      *
-     * The "active" layer is the page slot whose annotation wrapper is the
-     * most recent one to receive a tool stamp. We pick the last wrapper in
-     * document order that has the attribute set — matches the toolbar's
-     * current binding after a normal scroll/zoom sequence.
+     * The viewer propagates a tool change from the bound layer to every other
+     * page's layer, and each layer that accepts it stamps its own wrapper, so
+     * any wrapper carrying the expected tool proves the change reached a layer.
+     * The step takes the first match and fails if none appears in time.
      *
      * Example:
      *   Then the active annotation layer should report tool "pen"
@@ -632,14 +619,16 @@ class behat_local_unifiedgrader extends behat_base {
     public function the_active_annotation_layer_should_report_tool(string $tool): void {
         // Wait for the propagation tick to settle before reading.
         $this->execute('behat_general::wait_until_the_page_is_ready');
-        // Any wrapper carrying the attribute will do — propagation keeps
-        // every page in sync, so picking the first is sufficient.
-        $node = $this->find('css', '[data-current-tool="' . $tool . '"]');
-        if (!$node) {
-            throw new Exception(
-                "Expected an annotation layer reporting tool '{$tool}'; none found"
-            );
-        }
+        // The find() spin throws the exception given here when no wrapper
+        // matches before its timeout; it never returns null.
+        $this->find(
+            'css',
+            '[data-current-tool="' . $tool . '"]',
+            new ExpectationException(
+                "Expected an annotation layer reporting tool '{$tool}'; none found",
+                $this->getSession()
+            )
+        );
     }
 
     /** @var string|null Current student recorded for change/unchanged assertions. */

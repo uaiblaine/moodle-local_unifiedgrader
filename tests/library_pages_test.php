@@ -86,6 +86,16 @@ final class library_pages_test extends \basic_testcase {
     }
 
     /**
+     * The teacher's recode page holds the server to the codes its form offers.
+     */
+    public function test_my_library_recode_checks_the_code_is_offerable(): void {
+        $this->assertStringContainsString(
+            'library_audit::is_offerable_code((int) $USER->id, $newcode)',
+            $this->page('my_library.php')
+        );
+    }
+
+    /**
      * Both recode forms refuse an over-long code with a notice rather than an exception page.
      */
     public function test_recode_forms_handle_an_over_long_code(): void {

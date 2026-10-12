@@ -67,10 +67,6 @@ if ($scope === 'mine') {
     throw new moodle_exception('invalidparameter', 'debug');
 }
 
-header('Content-Type: text/csv; charset=utf-8');
-header('Content-Disposition: attachment; filename="' . $filename . '"');
-header('Content-Length: ' . strlen($csv));
-header('Cache-Control: private, max-age=0, must-revalidate');
-header('Pragma: no-cache');
-
-echo $csv;
+// The string goes out through send_file() so Moodle sets the caching, length and
+// attachment headers; the mark makes Excel read the file as UTF-8.
+send_file(library_csv::with_bom($csv), $filename, 0, 0, true, true, 'text/csv; charset=utf-8');

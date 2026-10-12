@@ -139,6 +139,9 @@ class save_grade extends external_api {
             if ($adapter->reset_blocked_by_lock($params['userid'])) {
                 throw new \moodle_exception('error_grade_clear_blocked_by_lock', 'local_unifiedgrader');
             }
+            // False when the grade was cleared but the submission could not be
+            // reverted (assign without mod/assign:editothersubmission); the
+            // grade half has happened either way.
             $success = $adapter->reset_grade_and_submission($params['userid']);
             return ['success' => $success];
         }
@@ -275,7 +278,11 @@ class save_grade extends external_api {
      */
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
-            'success' => new external_value(PARAM_BOOL, 'Whether the grade was saved successfully'),
+            'success' => new external_value(
+                PARAM_BOOL,
+                'Whether the grade was saved successfully; for a reset, false when the grade was cleared but the '
+                    . 'submission was kept',
+            ),
         ]);
     }
 

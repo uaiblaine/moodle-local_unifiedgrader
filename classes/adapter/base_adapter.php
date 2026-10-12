@@ -145,7 +145,8 @@ abstract class base_adapter {
      * default no-op behaviour in place — the WS just returns success.
      *
      * @param int $userid The student user ID.
-     * @return bool True on success.
+     * @return bool True when the whole reset was done; false when the grade was
+     *              cleared but another part of it was refused (the caller reports it).
      */
     public function reset_grade_and_submission(int $userid): bool {
         // Activity types with no grade of ours to clear (quiz, BigBlueButton)

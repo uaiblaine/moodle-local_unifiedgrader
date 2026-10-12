@@ -28,8 +28,6 @@ import Ajax from 'core/ajax';
 import Notification from 'core/notification';
 import {get_string as getString} from 'core/str';
 import * as SaveQueue from 'local_unifiedgrader/save_queue';
-import * as DirtyTracker from 'local_unifiedgrader/dirty_tracker';
-import * as OfflineCache from 'local_unifiedgrader/offline_cache';
 
 /**
  * Handle AJAX errors gracefully.
@@ -299,16 +297,19 @@ export default class {
         const savedForUser = userid;
         // Whether save_grade itself returned, as opposed to a refresh call after it.
         let stored = false;
+        // SaveQueue key of this student's grade save (see SaveQueue.enqueue).
+        const queuekey = cmid + ':' + userid;
 
         stateManager.setReadOnly(false);
         stateManager.state.ui.saving = true;
         stateManager.state.ui.gradesaving = true;
         stateManager.state.ui.lastsavefailed = false;
+        stateManager.state.ui.lastsavequeued = false;
         stateManager.state.ui.lastsaveerror = '';
         stateManager.setReadOnly(true);
 
         try {
-            await Ajax.call([{
+            const saveResult = await Ajax.call([{
                 methodname: 'local_unifiedgrader_save_grade',
                 args: {
                     cmid,
@@ -334,6 +335,18 @@ export default class {
                 },
             }])[0];
             stored = true;
+            // This payload holds the whole form, so a retry of an older one
+            // queued for this student would only put stale data back.
+            SaveQueue.discard('saveGrade', queuekey);
+
+            // A reset clears the grade but keeps the submission when the grader may not remove it.
+            // The grade half is stored, so this is a notice, not a failed save.
+            if (reset && saveResult?.success === false) {
+                Notification.addNotification({
+                    message: await getString('resetsubmissionkept', 'local_unifiedgrader'),
+                    type: 'warning',
+                });
+            }
 
             // If the teacher has already navigated to a different student,
             // skip the refresh — loadStudent will have already loaded the
@@ -425,8 +438,10 @@ export default class {
             // Refresh the filemanager widget after draft area has been re-prepared.
             this._refreshFileManager(stateManager);
         } catch (error) {
-            // Queue the save for retry on network errors; show full modal for server-side errors.
-            if (!error?.errorcode) {
+            // Queue the save for retry when save_grade itself failed on the network;
+            // show the full modal for server-side errors.
+            const queue = !error?.errorcode && !stored;
+            if (queue) {
                 SaveQueue.enqueue('saveGrade', () => Ajax.call([{
                     methodname: 'local_unifiedgrader_save_grade',
                     args: {
@@ -451,23 +466,30 @@ export default class {
                     reset: !!reset,
                     },
                 }])[0], () => {
-                    // Cleanup after successful retry.
-                    DirtyTracker.markClean('grade');
-                    DirtyTracker.markClean('feedback');
-                    OfflineCache.removeAll(cmid, userid);
-                });
+                    // The marking panel settles the form and the offline copy:
+                    // only it knows whether the form still holds this payload.
+                    document.dispatchEvent(new CustomEvent('unifiedgrader:queuedsavestored', {
+                        detail: {cmid, userid},
+                    }));
+                }, queuekey);
                 window.console.warn('[mutations] saveGrade failed, queued for retry:', error);
-            } else {
+            } else if (error?.errorcode) {
                 _handleError(error);
+            } else {
+                window.console.warn('[mutations] saveGrade stored, refresh failed:', error);
             }
             stateManager.setReadOnly(false);
             // A server refusal stored nothing; say so, or the panel treats the end
-            // of this save as a completed one. Not flagged: a network failure, whose
-            // payload is queued above and retried, and an error from a refresh call,
-            // which runs only after save_grade has stored the grade.
+            // of this save as a completed one. A network failure stored nothing
+            // either: its payload is queued above and retried, and the panel keeps
+            // the form unsaved until the retry lands. Not flagged: an error from a
+            // refresh call, which runs only after save_grade has stored the grade.
             if (error?.errorcode && !stored) {
                 stateManager.state.ui.lastsavefailed = true;
                 stateManager.state.ui.lastsaveerror = error.errorcode;
+            }
+            if (queue) {
+                stateManager.state.ui.lastsavequeued = true;
             }
             stateManager.state.ui.saving = false;
             stateManager.state.ui.gradesaving = false;

@@ -1,5 +1,65 @@
 # Changelog
 
+## v2.12.1+uai.3 (2026101201)
+
+Fixes for the findings of the v2.12.1+uai.1 comment audit and the security read of the upstream merge. Each was
+re-verified against the code before it was changed, and each behaviour fix has a test that fails without it.
+
+### Saving grades in the grader
+
+- A save that finishes after you have moved to the next student no longer marks that student's unsaved work as
+  saved or deletes its offline copy.
+- An edit made while a save was still in progress is no longer lost when you switch students straight away: the
+  grader waits (at most 15 seconds) for that save to go out first.
+- A save that fails because the connection dropped keeps the page marked as unsaved, keeps the offline copy, and
+  warns before you leave the page until the retry succeeds. A queued retry can no longer overwrite a newer save.
+- Restoring unsaved changes from the offline copy restores rubric levels, marking-guide scores and quiz question
+  marks together with the grade, instead of saving the grade as an override of the old criteria.
+- The grade filled in from a rubric matches the grade Moodle calculates, including rubrics where "Calculate grade
+  having a minimum score of the minimum achievable grade for the rubric" is off, and an unedited rubric total is
+  no longer stored as a rounded manual override.
+- When clearing a grade is refused, a grade that was a manual override of the rubric or guide total stays locked,
+  so the next criterion change no longer replaces it.
+
+### Grade rules on the server
+
+- Under marking workflow, saving, clearing or resetting (`--`) a grade in a stage the grader's role cannot set is
+  refused with a message that says so. It used to blame a gradebook override that did not exist, and `--` could
+  clear the grade past the workflow.
+- Emptying the grade box or typing `-` clears the grade on assignments graded with a marking guide or rubric, the
+  same as on forums, and also when the assignment no longer uses the grading method the page sends. It used to
+  recompute the mark from the criteria, or report success and keep the old mark.
+- `--` tells the teacher when it cleared the grade but kept the student's submission because they lack "Edit other
+  users' submissions", and no longer counts an empty submission row it created itself as kept.
+- A grade hidden for one student in the gradebook, or hidden until a date, stays hidden in that student's feedback
+  for assignments, forums and BigBlueButton.
+- The BigBlueButton engagement report enforces its own access: graders read any student's report (only students in
+  their own groups under separate groups without "Access all groups"), and students only their own once the grade
+  is released.
+
+### Comment library
+
+- CSV export also quotes cells whose formula follows leading spaces, matching Moodle's own spreadsheet export;
+  import removes the added quote again.
+- The CSV download carries a UTF-8 byte order mark, so Excel shows accented text correctly, and is sent through
+  Moodle's file API.
+- "Move to another course code" on My comment library offers, and the server accepts, only courses where you hold
+  the grading capability, not courses you only study in.
+- Anomaly labels on the moderation page come from one literal string map.
+
+### Badges
+
+- Status badges in the student navigator, quiz question-state badges, comment-library badges and tag chips state a
+  readable text colour on every background. `tests/badge_contrast_test.php` checks each background against the
+  colour it requires, including classes built from maps.
+
+### Tests and CI
+
+- CI runs once per pull-request push: push is limited to `main` and the stable branches, and a newer push cancels
+  the run it replaces, except on `main`.
+- The Behat-context guard test catches every form of the `MOODLE_INTERNAL` guard; the quiz gradebook-sync and
+  settings-navigation tests now assert what their names promise; stale Behat comments and docblocks corrected.
+
 ## v2.12.1+uai.2 (2026101200)
 
 - **Moodle 5.3.** `$plugin->supported` now reaches 5.3, and CI runs the full PHP and database grid on

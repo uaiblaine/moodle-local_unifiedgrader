@@ -544,7 +544,8 @@ final class assign_adapter_test extends \advanced_testcase {
      * assign::remove_submission() requires mod/assign:editothersubmission for another
      * user's submission, a capability core grants to no archetype, not even manager. So on
      * a default site "--" acts like "-": the grade goes, the row and its plugin data stay.
-     * The first leg pins that, the second the reset with the capability.
+     * The first leg pins that, and that the reset returns false to say so; the
+     * second pins the reset with the capability.
      *
      * Even with the capability the row is not deleted: remove_submission() resets its
      * status to new (or reopened) and asks each submission plugin to drop its data.
@@ -581,8 +582,12 @@ final class assign_adapter_test extends \advanced_testcase {
             'Precondition: the orphan carries submission plugin data.'
         );
 
-        // Leg 1: default editing teacher, no editothersubmission.
-        $s->adapter->reset_grade_and_submission($student->id);
+        // Leg 1: default editing teacher, no editothersubmission. The reset says
+        // the submission half was refused instead of reporting plain success.
+        $this->assertFalse(
+            $s->adapter->reset_grade_and_submission($student->id),
+            'A reset that kept the submission must not report full success.'
+        );
         $this->assertNull(
             $s->adapter->get_grade_data($student->id)['grade'],
             'The grade half of the reset always happens.'
@@ -599,7 +604,7 @@ final class assign_adapter_test extends \advanced_testcase {
 
         $adapter = adapter_factory::create($s->scenario->cm->id);
         $adapter->save_grade($student->id, 12.0, '');
-        $adapter->reset_grade_and_submission($student->id);
+        $this->assertTrue($adapter->reset_grade_and_submission($student->id));
 
         $this->assertEmpty(
             $DB->get_record('assignsubmission_onlinetext', ['submission' => $submission->id]),
@@ -608,6 +613,194 @@ final class assign_adapter_test extends \advanced_testcase {
         $row = $DB->get_record('assign_submission', ['id' => $submission->id]);
         $this->assertNotEmpty($row, 'The row itself is never deleted - only reset.');
         $this->assertSame(ASSIGN_SUBMISSION_STATUS_NEW, $row->status);
+    }
+
+    /**
+     * Build an assignment under marking workflow, graded 50 by the editing
+     * teacher and parked in the given workflow state, plus a non-editing
+     * teacher who holds mod/assign:grade but none of the review or release
+     * capabilities, so only the in-marking and ready-for-review states are hers.
+     *
+     * @param string $workflowstate One of the ASSIGN_MARKING_WORKFLOW_STATE_* values.
+     * @return object{scenario: \stdClass, student: \stdClass, marker: \stdClass}
+     */
+    private function create_workflow_scenario(string $workflowstate): object {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $s = $this->create_scenario(['modparams' => ['markingworkflow' => 1]]);
+        $student = $s->scenario->students[0];
+
+        $this->setUser($student);
+        $plugingen->create_assign_submission($s->scenario->activity, $student->id);
+        $this->setUser($s->scenario->teacher);
+        $s->adapter->save_grade($student->id, 50.0, '');
+
+        [$course, $cm] = get_course_and_cm_from_cmid($s->scenario->cm->id, 'assign');
+        $assignobj = new \assign(\context_module::instance($cm->id), $cm, $course);
+        $flags = $assignobj->get_user_flags($student->id, true);
+        $flags->workflowstate = $workflowstate;
+        $assignobj->update_user_flags($flags);
+
+        $marker = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($marker->id, $s->scenario->course->id, 'teacher');
+
+        return (object) ['scenario' => $s->scenario, 'student' => $student, 'marker' => $marker];
+    }
+
+    /**
+     * Marking workflow refuses a grade, a clear and a "--" reset with its own message.
+     *
+     * core's grading_disabled() is also true when the submission sits in a workflow
+     * state the grader may not set. The clear used to blame a gradebook override that
+     * did not exist and point at "--", and "--" then wrote -1 past the workflow; a
+     * typed grade blamed a gradebook lock. Each is now refused with the workflow
+     * message, and the mark stays.
+     *
+     * Moodle branches whose grading_disabled() does not apply the workflow state skip
+     * this test: their own save does not refuse, so neither does the adapter.
+     */
+    public function test_grading_refused_by_marking_workflow_says_so(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+
+        $w = $this->create_workflow_scenario(ASSIGN_MARKING_WORKFLOW_STATE_INREVIEW);
+        $this->setUser($w->marker);
+        $adapter = adapter_factory::create($w->scenario->cm->id);
+
+        [$course, $cm] = get_course_and_cm_from_cmid($w->scenario->cm->id, 'assign');
+        $assignobj = new \assign(\context_module::instance($cm->id), $cm, $course);
+        if (!$assignobj->grading_disabled($w->student->id)) {
+            $this->markTestSkipped('This Moodle branch does not restrict grading by marking workflow state.');
+        }
+        $this->assertFalse(
+            $assignobj->grading_disabled($w->student->id, false),
+            'Precondition: nothing in the gradebook blocks the grade; only the workflow does.'
+        );
+
+        $attempts = [
+            'clear' => fn() => $adapter->save_grade($w->student->id, null, ''),
+            'grade' => fn() => $adapter->save_grade($w->student->id, 70.0, ''),
+            'reset' => fn() => $adapter->reset_grade_and_submission($w->student->id),
+        ];
+        foreach ($attempts as $label => $attempt) {
+            try {
+                $attempt();
+                $this->fail("The {$label} should have been refused under marking workflow.");
+            } catch (\moodle_exception $e) {
+                $this->assertSame('error_grade_blocked_by_workflow', $e->errorcode, $label);
+            }
+            $this->assertEquals(
+                50.0,
+                adapter_factory::create($w->scenario->cm->id)->get_grade_data($w->student->id)['grade'],
+                "The refused {$label} must leave the mark in place."
+            );
+        }
+    }
+
+    /**
+     * The same marker may still grade a submission in a workflow state that is hers.
+     *
+     * The control for test_grading_refused_by_marking_workflow_says_so(): the refusal
+     * follows the workflow state, not the marker's role.
+     */
+    public function test_marking_workflow_allows_grading_in_a_state_the_grader_may_set(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+
+        $w = $this->create_workflow_scenario(ASSIGN_MARKING_WORKFLOW_STATE_INMARKING);
+        $this->setUser($w->marker);
+        $adapter = adapter_factory::create($w->scenario->cm->id);
+
+        $this->assertTrue($adapter->save_grade($w->student->id, 70.0, ''));
+        $this->assertEquals(70.0, $adapter->get_grade_data($w->student->id)['grade']);
+
+        $adapter->save_grade($w->student->id, null, '');
+        $this->assertNull($adapter->get_grade_data($w->student->id)['grade']);
+    }
+
+    /**
+     * Attach a marking guide with one criterion out of 10 to the scenario's assignment.
+     *
+     * @param \stdClass $scenario Scenario from the plugin generator.
+     * @return int The criterion id.
+     */
+    private function attach_marking_guide(\stdClass $scenario): int {
+        $context = \context_module::instance($scenario->cm->id);
+        $generator = $this->getDataGenerator()->get_plugin_generator('gradingform_guide');
+        $generator->create_instance($context, 'mod_assign', 'submissions', 'Guide', '', [
+            'Argument' => ['description' => 'Argument', 'descriptionmarkers' => 'Argument', 'maxscore' => 10],
+        ]);
+        $controller = get_grading_manager($context, 'mod_assign', 'submissions')->get_active_controller();
+        $this->assertNotEmpty($controller, 'Precondition: the guide is the active grading method.');
+        return (int) array_key_first($controller->get_definition()->guide_criteria);
+    }
+
+    /**
+     * A null grade clears the mark even when it comes with filled guide criteria.
+     *
+     * The grader sends the criteria on every save once the assignment has a guide,
+     * so an emptied grade box or a typed "-" reaches the server as a null grade with
+     * the guide still scored. Sent through the grading instance it recomputed the
+     * mark from the guide, and the clear never happened. forum_adapter_test pins the
+     * same rule for forums.
+     */
+    public function test_null_grade_with_guide_criteria_clears_the_mark(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+        $criterionid = $this->attach_marking_guide($s->scenario);
+        $criteria = ['criteria' => [$criterionid => ['score' => '7', 'remark' => '']]];
+
+        $adapter = adapter_factory::create($s->scenario->cm->id);
+        $adapter->save_grade($student->id, 70.0, '', FORMAT_HTML, $criteria);
+        $this->assertEqualsWithDelta(
+            70.0,
+            $adapter->get_grade_data($student->id)['grade'],
+            0.01,
+            'Precondition: the guide graded the student.'
+        );
+
+        $this->assertTrue($adapter->save_grade($student->id, null, '', FORMAT_HTML, $criteria));
+
+        $this->assertNull(
+            adapter_factory::create($s->scenario->cm->id)->get_grade_data($student->id)['grade'],
+            'A null grade must clear the mark, not have the guide recompute it.'
+        );
+    }
+
+    /**
+     * Criteria data without an active grading method does not swallow a clear.
+     *
+     * A page opened before the guide was removed still sends its criteria. With no
+     * grading instance to feed, assign::save_grade() stored nothing and the save
+     * reported success with the old mark in place.
+     */
+    public function test_null_grade_with_criteria_but_no_grading_method_clears_the_mark(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+        $this->assertNull(
+            get_grading_manager(\context_module::instance($s->scenario->cm->id), 'mod_assign', 'submissions')
+                ->get_active_controller(),
+            'Precondition: no advanced grading method is active.'
+        );
+
+        $s->adapter->save_grade($student->id, 15.0, '');
+        $this->assertEquals(15.0, $s->adapter->get_grade_data($student->id)['grade'], 'Precondition: a mark to clear.');
+
+        $criteria = ['criteria' => [1 => ['score' => '7', 'remark' => '']]];
+        $this->assertTrue($s->adapter->save_grade($student->id, null, '', FORMAT_HTML, $criteria));
+
+        $this->assertNull(
+            adapter_factory::create($s->scenario->cm->id)->get_grade_data($student->id)['grade'],
+            'The clear must land even though stale criteria came with it.'
+        );
     }
 
     /**

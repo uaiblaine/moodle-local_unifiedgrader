@@ -1,6 +1,22 @@
 name: Moodle Plugin CI
 
-on: [push, pull_request]
+# Push is filtered to the merge-target branches: unfiltered, a push to a branch with
+# an open pull request ran the whole matrix twice on the same commit (once for the
+# push event, once for pull_request). workflow_dispatch launches a run by hand.
+on:
+  push:
+    branches:
+      - main
+      - 'MOODLE_*_STABLE'
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same pull request supersedes the run still in progress. Never on
+# main: each merge there is the only run its commit gets, so a second merge landing
+# quickly must not cancel the first one's verdict.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Read-only by default: nothing in this workflow pushes, tags, or creates a
 # release, so GITHUB_TOKEN never needs write access even if a step's own code

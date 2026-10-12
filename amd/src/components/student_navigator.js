@@ -55,6 +55,8 @@ export default class extends BaseComponent {
         };
         this._searchTimeout = null;
         this._filtersVisible = false;
+        /** @type {?number} The student most recently picked; an earlier pick still waiting on a save gives way. */
+        this._pendingSelection = null;
         this._container = null;
         /** @type {?object} Prefetched lang strings for status actions. */
         this._strings = null;
@@ -1149,13 +1151,13 @@ export default class extends BaseComponent {
     _getStatusInfo(status) {
         const s = this._strings || {};
         const map = {
-            submitted: {label: s.status_submitted || 'Submitted', cls: 'bg-success'},
-            graded: {label: s.status_graded || 'Graded', cls: 'bg-info'},
-            draft: {label: s.status_draft || 'Draft', cls: 'bg-warning'},
-            nosubmission: {label: s.status_nosubmission || 'No submission', cls: 'bg-secondary'},
-            new: {label: s.status_new || 'Not submitted', cls: 'bg-secondary'},
+            submitted: {label: s.status_submitted || 'Submitted', cls: 'bg-success text-white'},
+            graded: {label: s.status_graded || 'Graded', cls: 'bg-info text-white'},
+            draft: {label: s.status_draft || 'Draft', cls: 'bg-warning text-dark'},
+            nosubmission: {label: s.status_nosubmission || 'No submission', cls: 'bg-secondary text-dark'},
+            new: {label: s.status_new || 'Not submitted', cls: 'bg-secondary text-dark'},
         };
-        return map[status] || {label: status, cls: 'bg-secondary'};
+        return map[status] || {label: status, cls: 'bg-secondary text-dark'};
     }
 
     /**
@@ -1394,14 +1396,33 @@ export default class extends BaseComponent {
         if (userid === state.currentUser?.id) {
             return;
         }
+        this._pendingSelection = userid;
 
         // Auto-save grade/feedback before switching if there are unsaved changes.
+        // If another save is in flight, the marking panel holds this request
+        // until that one ends and hands back a promise in detail.waitfor: the
+        // held request reads the form when it runs, so loading the next student
+        // before then would leave it reading that student's form, and the edit
+        // would never be sent. The wait is capped so a save that never returns
+        // cannot block navigation; the offline copy still holds the edit then.
         if (DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback')) {
+            const detail = {waitfor: []};
             this.element.dispatchEvent(new CustomEvent('unifiedgrader:requestsave', {
                 bubbles: true,
+                detail,
             }));
+            if (detail.waitfor.length) {
+                await Promise.race([
+                    Promise.all(detail.waitfor),
+                    new Promise(r => setTimeout(r, 15000)),
+                ]);
+            }
             // Brief pause to let the save dispatch start.
             await new Promise(r => setTimeout(r, 100));
+            // The teacher may have picked someone else during the wait.
+            if (this._pendingSelection !== userid) {
+                return;
+            }
         }
 
         this.reactive.dispatch('loadStudent', state.activity.cmid, userid);
@@ -1459,13 +1480,13 @@ export default class extends BaseComponent {
      */
     _getStatusBadgeClass(status) {
         const map = {
-            submitted: 'bg-success',
-            graded: 'bg-info',
-            draft: 'bg-warning',
-            nosubmission: 'bg-secondary',
-            new: 'bg-secondary',
+            submitted: 'bg-success text-white',
+            graded: 'bg-info text-white',
+            draft: 'bg-warning text-dark',
+            nosubmission: 'bg-secondary text-dark',
+            new: 'bg-secondary text-dark',
         };
-        return map[status] || 'bg-secondary';
+        return map[status] || 'bg-secondary text-dark';
     }
 
     /**

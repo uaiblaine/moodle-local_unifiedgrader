@@ -698,6 +698,39 @@ final class bbb_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * A grade the teacher hid for this one student is not released, though the
+     * grade item stays visible; a hidden-until date in the past releases it again.
+     */
+    public function test_is_grade_released_false_when_own_grade_hidden(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $student = $s->scenario->students[0];
+        $s->adapter->save_grade($student->id, 70.0, '', FORMAT_HTML);
+        // The control: released before anything is hidden.
+        $this->assertTrue($s->adapter->is_grade_released($student->id));
+
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'bigbluebuttonbn',
+            'iteminstance' => (int) $s->scenario->activity->id,
+            'itemnumber' => 0,
+            'courseid' => (int) $s->scenario->course->id,
+        ]);
+        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id]);
+
+        $gradegrade->set_hidden(1);
+        $this->assertFalse($gradeitem->is_hidden(), 'Only the student\'s grade is hidden, not the item.');
+        $this->assertFalse($s->adapter->is_grade_released($student->id));
+
+        $gradegrade->set_hidden(time() + DAYSECS);
+        $this->assertFalse($s->adapter->is_grade_released($student->id));
+
+        $gradegrade->set_hidden(time() - DAYSECS);
+        $this->assertTrue($s->adapter->is_grade_released($student->id));
+    }
+
+    /**
      * Two rostered sessions, the student was in one: only that one is offered.
      *
      * Attendance is the submission on BBB, so the pane must show the sessions
@@ -1249,6 +1282,55 @@ final class bbb_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * A student cannot read another student's feedback report; a grader can.
+     */
+    public function test_feedback_report_refuses_another_students_report(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $reader = $s->scenario->students[0];
+        $target = $s->scenario->students[1];
+        $gen->create_bbb_summary_log($s->scenario->activity, $target->id, ['talks' => 12], 1800, null, 'rec-1');
+        $s->adapter->save_grade($target->id, 70.0, '', FORMAT_HTML);
+        $adapter = $this->adapter_with_recordings($s->scenario, []);
+
+        // The control: the grader reads the target's report.
+        $this->assertSame(12, $adapter->get_feedback_report($target->id)['totals']['talks']);
+
+        $this->setUser($reader);
+        $this->expectException(\required_capability_exception::class);
+        $adapter->get_feedback_report($target->id);
+    }
+
+    /**
+     * A student reads their own report only once their grade is released.
+     */
+    public function test_feedback_report_own_report_needs_release(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario();
+        $gen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $student = $s->scenario->students[0];
+        $gen->create_bbb_summary_log($s->scenario->activity, $student->id, ['talks' => 12], 1800, null, 'rec-1');
+        $adapter = $this->adapter_with_recordings($s->scenario, []);
+
+        $this->setUser($student);
+        try {
+            $adapter->get_feedback_report($student->id);
+            $this->fail('An unreleased report was returned to the student.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('feedback_not_available', $e->errorcode);
+        }
+
+        $this->setUser($s->scenario->teacher);
+        $s->adapter->save_grade($student->id, 70.0, '', FORMAT_HTML);
+
+        $this->setUser($student);
+        $this->assertSame(12, $adapter->get_feedback_report($student->id)['totals']['talks']);
+    }
+
+    /**
      * A student reading their own feedback sees every session's figures at once.
      *
      * The grader's switcher hides all but the selected session behind `d-none`;
@@ -1321,5 +1403,30 @@ final class bbb_adapter_test extends \advanced_testcase {
         $this->assertNotEmpty($parsed['guidecriteria']);
         $this->assertArrayHasKey('shortname', $parsed['guidecriteria'][0]);
         $this->assertArrayHasKey('maxscore', $parsed['guidecriteria'][0]);
+    }
+
+    /**
+     * Separate groups: a grader without accessallgroups reads reports of their own groups' students only,
+     * while one with accessallgroups reads any.
+     */
+    public function test_feedback_report_respects_separate_groups_for_the_grader(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $g = $this->create_separate_groups_scenario();
+        $this->getDataGenerator()->create_group_member(['groupid' => $g->groupa, 'userid' => $g->scenario->teacher->id]);
+        $this->setUser($g->scenario->teacher);
+        $adapter = adapter_factory::create((int) $g->scenario->cm->id);
+
+        // Teachers hold accessallgroups by default: both students are readable.
+        $this->assertArrayHasKey('hasengagement', $adapter->get_feedback_report((int) $g->other->id));
+
+        $roleid = (int) $DB->get_field('role', 'id', ['shortname' => 'editingteacher']);
+        assign_capability('moodle/site:accessallgroups', CAP_PROHIBIT, $roleid, $g->scenario->context->id, true);
+        accesslib_clear_all_caches_for_unit_testing();
+
+        $this->assertArrayHasKey('hasengagement', $adapter->get_feedback_report((int) $g->target->id));
+        $this->expectException(\required_capability_exception::class);
+        $adapter->get_feedback_report((int) $g->other->id);
     }
 }
