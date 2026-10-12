@@ -86,26 +86,18 @@ class behat_local_unifiedgrader extends behat_base {
     /**
      * Wait for the marking panel to finish its initial render.
      *
-     * This has to wait on something the JavaScript PRODUCES, not on an element
-     * the template ships. Both selectors this step used to wait for —
-     * [data-region="rubric-body"] and [data-action="grade-input"] — are static
-     * markup in marking_panel.mustache, present in the very first byte of HTML,
-     * so the wait returned on its first evaluation and proved nothing. Scenarios
-     * only survived because the step after it happened to wait for real.
+     * Waits on what the JavaScript produces, not on template markup:
+     * [data-region="rubric-body"] and [data-action="grade-input"] are static in
+     * marking_panel.mustache, so a wait for them returns at once. The signals:
      *
-     * The two signals used instead:
-     *
-     *  - the navigator's current-student name, which starts as the literal "--"
-     *    placeholder and is only rewritten once participants and the current
-     *    student have loaded from the server (student_navigator.js
-     *    _renderCurrentStudent). This is the strong one: it cannot be true
-     *    before the reactive state holds server data, and the marking panel's
-     *    own stateReady — which attaches every listener the scenarios depend
-     *    on — runs before that.
+     *  - the navigator's current-student name, which the template ships as "--"
+     *    and student_navigator.js _updateCurrentStudent() rewrites from its
+     *    stateReady. Components get stateReady in registration order and
+     *    grader.js registers the marking panel before the navigator, so by then
+     *    the panel's stateReady has attached every listener the scenarios use.
      *  - the grade input's max attribute, which the template does not set and
-     *    _updateMaxGrade stamps on during hydration. Only meaningful when the
-     *    points input is the visible one, so scale-graded and grading-disabled
-     *    activities are exempted rather than made to hang.
+     *    _updateMaxGrade() adds. Checked only while the points input is visible,
+     *    so a scale-graded activity, where it is hidden, does not hang the wait.
      *
      * @Given /^the marking panel has loaded$/
      */
@@ -152,7 +144,7 @@ class behat_local_unifiedgrader extends behat_base {
 
     /**
      * Type a value into the top-level grade input and trigger the focus-out
-     * autosave by clicking elsewhere. Mirrors what a teacher actually does
+     * autosave by blurring the input. Mirrors what a teacher actually does
      * so the override / dirty / reset code paths fire naturally.
      *
      * Example:
@@ -164,14 +156,10 @@ class behat_local_unifiedgrader extends behat_base {
     public function i_enter_as_the_overall_grade(string $value): void {
         $node = $this->find('css', '[data-action="grade-input"]');
         $node->setValue($value);
-        // Blur the input itself rather than clicking somewhere else to steal
-        // focus. This used to click the middle of [data-region="marking-content"]
-        // — and the middle of that region is the Marking guide card header,
-        // which is a Bootstrap collapse toggle, so entering a grade quietly
-        // collapsed the guide and every later step that touched a criterion
-        // score failed with "element not interactable". blur() fires the same
-        // real focusout the listener is bound to, without depending on what
-        // happens to be under the centre of the panel.
+        // Blur the input rather than click elsewhere: the centre of the marking
+        // panel can be the Marking guide card header, a Bootstrap collapse toggle,
+        // and a collapsed guide makes later criterion steps fail as not
+        // interactable. blur() fires the focusout the save listener is bound to.
         $this->execute_script(
             "(function(){var i=document.querySelector('[data-action=\"grade-input\"]');"
             . "if (i) { i.blur(); }})();"
@@ -182,15 +170,11 @@ class behat_local_unifiedgrader extends behat_base {
     /**
      * Attach a marking guide to an assignment, with the given criteria.
      *
-     * Core has no Behat data generator for grading forms, but it does ship a
-     * PHPUnit one — gradingform_guide_generator::create_instance() — and that
-     * generator already resolves its dependencies through
-     * testing_util::get_data_generator(), so it works unchanged from here.
-     * Hand-rolling a definition and calling update_definition() directly would
-     * duplicate a helper core already maintains.
-     *
-     * The generator refuses to run as user 0; Behat's own before-scenario hook
-     * has already switched to admin by the time a Given runs, so that holds.
+     * Core defines grading forms in Behat only through the editor UI, so this
+     * calls core's PHPUnit generator, gradingform_guide_generator::create_instance(),
+     * which resolves its dependencies through testing_util::get_data_generator()
+     * and works unchanged here. It refuses to run as user 0; Behat's
+     * before-scenario hook has already made the admin the current user.
      *
      * Example:
      *   Given a marking guide is attached to "Essay 1" with criteria:
@@ -218,9 +202,9 @@ class behat_local_unifiedgrader extends behat_base {
         $definition = [];
         foreach ($criteria->getHash() as $row) {
             $definition[$row['shortname']] = [
-                // The panel keys its criterion inputs off the visible heading,
-                // so description and markers mirror the shortname rather than
-                // inventing prose the scenarios would then have to know about.
+                // The steps find a criterion by its heading, the shortname;
+                // description and markers repeat it so a feature names each
+                // criterion once.
                 'description' => $row['shortname'],
                 'descriptionmarkers' => $row['shortname'],
                 'maxscore' => (float) $row['maxscore'],
@@ -602,26 +586,16 @@ class behat_local_unifiedgrader extends behat_base {
             . "]]"
             . "//input[@data-criterionid and not(@data-levelid)]";
 
-        // Re-find on every attempt instead of typing into a node located
-        // earlier. _renderAdvancedGrading rebuilds the criterion DOM on the
-        // render that follows a save, so a node found before that lands is
-        // detached by the time the keystrokes arrive and the driver reports it
-        // as not interactable. Setting a score right after a save-triggering
-        // step is an ordinary thing for a scenario to do, so the step absorbs
-        // the rebuild rather than making every caller sequence around it.
+        // Re-find the input on every attempt and retry until the score sticks:
+        // _renderGuide() rebuilds the criterion rows when the definition arrives
+        // or changes, and a fresh render (student or attempt change) writes the
+        // stored fill values back, so a node found earlier can be detached and a
+        // typed score overwritten.
         $this->execute('behat_general::wait_until_the_page_is_ready');
         $this->spin(
             function () use ($xpath, $score) {
                 $input = $this->find('xpath', $xpath);
                 $input->setValue($score);
-                // Confirm the value survived. _renderGuide repopulates every
-                // criterion input from server fill data on the render that
-                // follows a save, so a score typed while that is in flight is
-                // silently overwritten a moment later - and the scenario then
-                // asserts against a panel that never saw the edit. Retrying
-                // until the value sticks is what makes this step mean what it
-                // says; without it a scenario setting a score after a save
-                // passes while proving nothing.
                 if ((string) $this->find('xpath', $xpath)->getValue() !== $score) {
                     throw new ExpectationException(
                         "The criterion score did not stick as '{$score}'",
@@ -811,15 +785,10 @@ class behat_local_unifiedgrader extends behat_base {
      * the same commit passed everywhere else. The condition asserted is
      * unchanged — only the patience for it is.
      *
-     * On failure it reports what it actually saw, because the DOM state it
-     * waits for has more than one cause. _toggleFeedbackMode only shows the
-     * card when there is feedback AND the panel is not in editing mode, so
-     * "no card" is produced identically by an editing flag that stayed set and
-     * by a save that wiped the feedback. Naming one of them in the message
-     * would be a guess; dumping the observed state lets whoever reads the
-     * failure tell them apart without a faildump. (Diagnosing exactly this
-     * cost a full instrumentation cycle when the v2.8.5 collapse bug was
-     * being chased.)
+     * On failure the message reports the observed state, because "no card" has
+     * two causes: _toggleFeedbackMode() shows the card only when there is
+     * feedback and the panel is not in editing mode, so an editing flag left set
+     * and a save that wiped the feedback look the same.
      *
      * @Then /^the overall feedback is shown as a saved card$/
      */
@@ -955,13 +924,9 @@ class behat_local_unifiedgrader extends behat_base {
     /**
      * Assert the overall grade input currently holds the given value.
      *
-     * Core's "the field ... matches value" resolves its locator as a FIELD - name,
-     * id, label or placeholder - so a CSS selector never matches and it reports the
-     * field as missing even though the element is right there. Core's attribute step
-     * is no better here: it reads the value ATTRIBUTE, which keeps the markup's
-     * initial value and does not follow what the user typed.
-     *
-     * So read the live value off the node, which is what the scenarios mean.
+     * Reads the live value property. Core's "the field ... matches value" takes a
+     * field locator (name, id, label or placeholder), not a CSS selector, and
+     * core's attribute steps find no value attribute: the template ships none.
      *
      * Example:
      *   Then the overall grade shows "18"
@@ -981,20 +946,18 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
-     * Type a grade and leave the field — which fires the panel's immediate
-     * focus-out save — then correct it and leave the field again, so the second
-     * save is requested while the first is still in flight.
+     * Type a grade and leave the field, which fires the panel's immediate
+     * focus-out save, then correct it and leave again while that save is in flight.
      *
-     * Driven as one synchronous script on purpose. The panel raises its
-     * "save in flight" flag synchronously inside the first handler, before the
-     * AJAX promise can settle, so the second request is *guaranteed* to land
-     * mid-flight; spacing the two out as separate Behat steps would turn the
-     * scenario into a race against the network.
+     * One synchronous script on purpose: the panel raises its save-in-flight flag
+     * inside the first handler, before the AJAX promise can settle, so the second
+     * request is certain to land mid-flight. As separate steps it would not,
+     * because after every step Behat waits for pending JavaScript, which includes
+     * the save's core/reactive dispatch.
      *
-     * The focus-out save is used rather than the "Save feedback" button because
-     * the button is disabled for the duration of a save, so a teacher cannot
-     * reach that path — the reachable overlaps are this one, "Delete feedback",
-     * and the save the navigator requests before switching student.
+     * The focus-out save is used because "Save feedback" is disabled while a save
+     * runs; the overlaps a teacher can reach are this one, "Delete feedback", and
+     * the save the navigator requests before switching student.
      *
      * @When /^I enter "(?P<first>[^"]*)" as the overall grade and correct it to "(?P<second>[^"]*)" before the save lands$/
      * @param string $first Grade typed first, whose save is still in flight.
@@ -1022,15 +985,13 @@ class behat_local_unifiedgrader extends behat_base {
      * the guide while that save is still in flight.
      *
      * The second change reaches the server only through the panel's debounced
-     * autosave, which is the path every rubric level click and every ranged
-     * rubric slider takes. It used to return early whenever a save was in
-     * flight, and the finishing save then marked the unsent change clean.
+     * autosave, the path every rubric level click and ranged rubric slider takes,
+     * which must hold a request made during a save rather than drop it.
      *
-     * One synchronous script for the same reason as the grade-box variant
-     * above: the "Save feedback" click raises the in-flight flag before the
-     * AJAX promise can settle, so the change is guaranteed to land mid-flight.
-     * Focus is handed to the page body so the guide's focus-out handler takes
-     * its immediate branch rather than deferring.
+     * One synchronous script, as in the grade-box variant above: the "Save
+     * feedback" click raises the in-flight flag before the AJAX promise can
+     * settle, so the change lands mid-flight. Focus is handed to the page body so
+     * the guide's focus-out handler takes its immediate branch rather than deferring.
      *
      * @When /^I score "(?P<criterion>[^"]+)" "(?P<first>[^"]*)", save, and change it to "(?P<second>[^"]*)" before the save lands$/
      * @param string $criterion Criterion shortname, as shown in its heading.
@@ -1068,12 +1029,11 @@ class behat_local_unifiedgrader extends behat_base {
     }
 
     /**
-     * Assert the grade the server actually stored for a student, waiting for it.
+     * Assert the grade the server stored for a student, waiting for it.
      *
-     * Reads the database rather than the page, because the point of the
-     * scenarios that use it is whether a save reached the server at all — a
-     * reload would race the very round trip under test (core/ajax registers no
-     * pending-JS marker, so Behat's page-ready wait does not cover it).
+     * Reads assign_grades rather than the page: the scenarios that use it are
+     * about whether a save reached the server, which the panel's display cannot
+     * show.
      *
      * @Then /^the saved grade for "(?P<student>[^"]+)" on "(?P<activity>[^"]+)" is "(?P<expected>[^"]*)"$/
      * @param string $student Student username.
@@ -1147,12 +1107,9 @@ class behat_local_unifiedgrader extends behat_base {
     /**
      * Set one admin setting, named the way get_config() reads it back.
      *
-     * Core ships "the following config values are set as admin:" for a table of
-     * settings, which is a heavy shape for the single flag most scenarios need in
-     * their Background. This is the one-line form, and it takes the plugin-qualified
-     * name so the feature file reads the same way the setting is written in code.
-     *
-     * A bare name with no slash sets a core setting, matching set_config().
+     * A one-line form of core's "the following config values are set as admin:"
+     * table step. "plugin/name" sets a plugin setting; a bare name sets a core
+     * one, as set_config() does.
      *
      * Example:
      *   Given the "local_unifiedgrader/enable_assign" admin setting is "1"

@@ -31,6 +31,7 @@ namespace local_unifiedgrader\adapter;
 defined('MOODLE_INTERNAL') || die();
 
 use local_unifiedgrader\bbb\engagement_service;
+use local_unifiedgrader\pdf\pdf_text;
 use local_unifiedgrader\submission_comment_manager;
 
 global $CFG;
@@ -89,7 +90,11 @@ class bbb_adapter extends base_adapter {
 
         return [
             'id' => (int) $this->cm->id,
-            'name' => format_string($this->bbb->name),
+            // Plain text, not HTML: this value is rendered through an escaping sink
+            // (Mustache {{ }}, textContent or a URL encoder), which escapes it once
+            // more. Letting format_string() escape as well is what turned a course
+            // named "Grief & Loss" into "Grief &amp; Loss" on screen.
+            'name' => format_string($this->bbb->name, true, ['escape' => false]),
             'type' => 'bigbluebuttonbn',
             'duedate' => 0,
             'cutoffdate' => 0,
@@ -277,9 +282,18 @@ class bbb_adapter extends base_adapter {
 
         // The pills are scoped to the sessions this student actually attended.
         // On BBB the attendance *is* the submission, so a session they were not
-        // in is not theirs to be marked on. filter_to_attended_recordings()
-        // carries the guards that stop a missing roster reading as absence.
+        // in is not theirs to be marked on.
         $allrecordings = $recordings;
+        // Group membership first. In a separate-groups activity each meeting
+        // belongs to one group, and a student who is not in that group could not
+        // have been in the meeting — which is decided by enrolment data we always
+        // have, rather than by a roster we may never have been sent. It therefore
+        // narrows the list even on sites where the attendance ids never reconcile,
+        // which is the case this filter exists for.
+        $groupfiltered = $this->filter_to_group_recordings($recordings, $userid);
+        $recordings = $groupfiltered['recordings'];
+        // Then attendance within those sessions. filter_to_attended_recordings()
+        // carries the guards that stop a missing roster reading as absence.
         $filtered = $this->filter_to_attended_recordings(
             $recordings,
             $activitypoints['sessions'],
@@ -287,11 +301,20 @@ class bbb_adapter extends base_adapter {
             $hasjoined,
         );
         $recordings = $filtered['recordings'];
-        // Why the filter stood down, if it did. Surfaced in the pane so a teacher
-        // is not left wondering why a student they know was absent still shows
-        // every session, and so the id mismatch behind it is visible to an admin
-        // without a database query.
-        $filterreason = $filtered['reason'];
+        // Why the filters stood down, if they did. Surfaced in the pane so a
+        // teacher is not left wondering why a student they know was absent still
+        // shows every session, and so the id mismatch behind it is visible to an
+        // admin without a database query. Every reason opens "Showing every
+        // session", so it is only true while nothing was hidden: once either pass
+        // has narrowed the list the notice would contradict the pills beside it.
+        //
+        // The group reason is preferred where both apply. A student in no group
+        // and an activity with no rosters are both true of the same pane, but
+        // only the first names something a teacher can go and fix.
+        $filterreason = '';
+        if (count($recordings) === count($allrecordings)) {
+            $filterreason = $groupfiltered['reason'] !== '' ? $groupfiltered['reason'] : $filtered['reason'];
+        }
         // Everything filtered out: the student attended none of the sessions.
         // Kept distinct from "this activity has no recordings at all" so the
         // template can say which of the two it is.
@@ -330,7 +353,8 @@ class bbb_adapter extends base_adapter {
         // aggregate/first recording — which, in a separate-groups activity, may be
         // a different session or one they could not otherwise see.
         global $USER;
-        if ($selectedrecordingid === '' && $hasrecordings && $userid === (int) $USER->id) {
+        $isownfeedback = ($userid === (int) $USER->id);
+        if ($selectedrecordingid === '' && $hasrecordings && $isownfeedback) {
             $feedbackrecids = $this->get_feedback_recording_ids($userid);
             foreach ($recordings as $i => $rec) {
                 if ($feedbackrecids && in_array((string) $rec['bbbrecordingid'], $feedbackrecids, true)) {
@@ -470,6 +494,12 @@ class bbb_adapter extends base_adapter {
             'activerecordingurl' => $hasrecordings ? $recordings[$activeindex]['playbackurl'] : '',
             'isaggregate' => $isaggregate,
             'showaggregatetiles' => $showaggregatetiles,
+            // A student reading their own feedback gets every session's figures
+            // at once — totals first, then a block per session — rather than the
+            // one-at-a-time switcher the grader drives. They are looking at a
+            // finished record, not marking against a particular recording, and
+            // the sessions hidden behind the switcher were simply never seen.
+            'stackallsessions' => $isownfeedback && count($activitypoints['sessions']) > 1,
             'activitypoints' => $activitypoints,
             'hasattended' => $hasattended,
             'hassummary' => $activitypoints['sessioncount'] > 0,
@@ -1279,6 +1309,217 @@ class bbb_adapter extends base_adapter {
         return $result;
     }
 
+
+    /**
+     * Engagement metrics and recording annotations for one student, as data.
+     *
+     * The grading pane gets this material as rendered HTML from
+     * get_submission_data(), which is right for a screen: it carries the player,
+     * the session switcher and the refresh controls. Neither the feedback PDF nor
+     * the student's own summary can use any of that — a PDF cannot play a
+     * recording, and dumping the pane's Bootstrap markup into TCPDF produced the
+     * unstyled list of numbers this method replaces, with every session's tiles
+     * stacked on top of each other because TCPDF ignores the `d-none` that hides
+     * them on screen.
+     *
+     * Scoped to the student throughout. get_engagement_summary() reads only their
+     * own sessions, so a session they were not in cannot appear here, and the
+     * annotations are those addressed to them.
+     *
+     * @param int $userid The student the report is about.
+     * @return array {hasengagement, sessioncount, totals, sessions[], annotations[],
+     *                hasannotations}
+     */
+    public function get_feedback_report(int $userid): array {
+        $summary = $this->get_engagement_summary($userid);
+
+        // Label each session with its recording's date where the two reconcile,
+        // falling back to when the summary was logged — the same fallback the
+        // grading pane uses, so the two never disagree about a session's name.
+        $labels = [];
+        foreach ($this->get_recordings_for_user($userid) as $rec) {
+            if (!empty($rec['bbbrecordingid'])) {
+                $labels[(string) $rec['bbbrecordingid']] = $rec['sessionlabel'];
+            }
+        }
+
+        $sessions = [];
+        foreach ($summary['sessions'] as $session) {
+            $ref = (string) ($session['recordingref'] ?? '');
+            $session['sessionlabel'] = $labels[$ref]
+                ?? ($session['timecreated'] > 0
+                    ? userdate($session['timecreated'])
+                    : get_string('bbb_session_unmatched', 'local_unifiedgrader'));
+            $sessions[] = $session;
+        }
+
+        $annotations = $this->get_annotation_comments($userid, $labels);
+
+        return [
+            'hasengagement' => $summary['sessioncount'] > 0,
+            'sessioncount' => (int) $summary['sessioncount'],
+            'totals' => [
+                'chats' => (int) $summary['chats'],
+                'talks' => (int) $summary['talks'],
+                'raisehand' => (int) $summary['raisehand'],
+                'pollvotes' => (int) $summary['pollvotes'],
+                'emojis' => (int) $summary['emojis'],
+                'durationformatted' => $summary['durationformatted'],
+                'activityscoreformatted' => $summary['activityscoreformatted'],
+                'hasactivityscore' => (bool) $summary['hasactivityscore'],
+            ],
+            // Only worth listing per session when there is more than one: with a
+            // single session the totals row already is that session.
+            'sessions' => count($sessions) > 1 ? $sessions : [],
+            'annotations' => $annotations,
+            'hasannotations' => !empty($annotations),
+        ];
+    }
+
+    /**
+     * Timestamped recording annotations addressed to this student, flattened to
+     * plain text and ordered by position in the recording.
+     *
+     * Empty when bbbext_advgrd is not installed — the annotations live in its
+     * tables, and everything here degrades to "no comments" without it.
+     *
+     * @param int $userid The addressed student.
+     * @param array $labels Recording id => session label, for naming each group.
+     * @return array<int, array{sessionlabel: string, timestamp: string, text: string}>
+     */
+    protected function get_annotation_comments(int $userid, array $labels = []): array {
+        if (!class_exists('\\bbbext_advgrd\\local\\annotations')) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($this->get_feedback_recording_ids($userid) as $recordingid) {
+            $rows = \bbbext_advgrd\local\annotations::list_for_review(
+                (int) $this->bbb->id,
+                (string) $recordingid,
+                $userid,
+            );
+            foreach ($rows as $row) {
+                $text = trim(pdf_text::plain((string) ($row->body ?? '')));
+                if ($text === '') {
+                    // Body was nothing but an embedded audio or video comment.
+                    // Keep the timestamp and say so, rather than dropping a
+                    // comment the student can still go and listen to.
+                    $text = get_string('bbb_annotation_media_only', 'local_unifiedgrader');
+                }
+                $result[] = [
+                    'sessionlabel' => $labels[(string) $recordingid] ?? '',
+                    'timestamp' => $this->format_timestamp((int) ($row->timestampms ?? 0)),
+                    'text' => $text,
+                ];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Format a recording position in milliseconds as H:MM:SS, or M:SS under an hour.
+     *
+     * @param int $ms
+     * @return string
+     */
+    private function format_timestamp(int $ms): string {
+        $seconds = (int) max(0, floor($ms / 1000));
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+        $secs = $seconds % 60;
+
+        return $hours > 0
+            ? sprintf('%d:%02d:%02d', $hours, $minutes, $secs)
+            : sprintf('%d:%02d', $minutes, $secs);
+    }
+
+    /**
+     * Narrow the recording list to the sessions $userid's groups could have been in.
+     *
+     * A separate-groups BBB activity runs one meeting per group, and each
+     * recording is stamped with the group it ran for. A student who is not in
+     * that group was never able to join it, so the session is not theirs to be
+     * marked on — and unlike attendance, this is decided by enrolment data the
+     * site always holds rather than by a roster BBB may never have sent. That
+     * matters: where the analytics callback's session ids do not reconcile with
+     * the recording ids, the attendance filter can only stand down and show
+     * everything, and this pass is what still narrows the list to the student's
+     * own group.
+     *
+     * Deliberately limited to separate groups. Under visible groups (or no
+     * groups) a student is free to join another group's meeting, so their
+     * membership says nothing about where they were and only attendance can.
+     *
+     * Two things are always kept:
+     *
+     * 1. Recordings with no group (groupid 0) — a meeting run for everybody,
+     *    which every student could attend whatever their group.
+     * 2. Recordings carrying annotation feedback for this student, as elsewhere:
+     *    feedback addressed to them must stay reachable however they came by it.
+     *
+     * When the student is in no group at all the filter stands down rather than
+     * reporting them absent from everything, on the same principle as the
+     * attendance guards: missing group data and genuine non-membership are the
+     * same evidence, and the pane says which it assumed.
+     *
+     * @param array $recordings Entries from get_recordings_for_user().
+     * @param int $userid The student being marked.
+     * @return array{recordings: array, reason: string}
+     */
+    private function filter_to_group_recordings(array $recordings, int $userid): array {
+        $standdown = ['recordings' => $recordings, 'reason' => ''];
+
+        if (empty($recordings)) {
+            return $standdown;
+        }
+        if ((int) groups_get_activity_groupmode($this->cm, $this->course) !== SEPARATEGROUPS) {
+            return $standdown;
+        }
+
+        // Nothing to judge: every session ran ungrouped, so group membership
+        // cannot separate them and the attendance pass is the only one that can.
+        $hasgrouped = false;
+        foreach ($recordings as $rec) {
+            if ((int) ($rec['groupid'] ?? 0) > 0) {
+                $hasgrouped = true;
+                break;
+            }
+        }
+        if (!$hasgrouped) {
+            return $standdown;
+        }
+
+        // Restricted to the activity's grouping when it has one, so a membership
+        // of some unrelated course group never counts as access to a session.
+        $usergroups = groups_get_all_groups(
+            (int) $this->course->id,
+            $userid,
+            (int) ($this->cm->groupingid ?? 0),
+            'g.id',
+        );
+        if (empty($usergroups)) {
+            return ['recordings' => $recordings, 'reason' => 'nogroups'];
+        }
+        $memberof = array_flip(array_map('intval', array_keys($usergroups)));
+        $feedbackrefs = array_flip($this->get_feedback_recording_ids($userid));
+
+        $kept = [];
+        foreach ($recordings as $rec) {
+            $groupid = (int) ($rec['groupid'] ?? 0);
+            if (
+                $groupid === 0
+                || isset($memberof[$groupid])
+                || isset($feedbackrefs[(string) $rec['bbbrecordingid']])
+            ) {
+                $kept[] = $rec;
+            }
+        }
+
+        return ['recordings' => $kept, 'reason' => ''];
+    }
+
     /**
      * Narrow the recording list to the sessions $userid actually attended.
      *
@@ -1335,10 +1576,13 @@ class bbb_adapter extends base_adapter {
         $feedbackrefs = array_flip($this->get_feedback_recording_ids($userid));
 
         $kept = [];
+        $matchedattendance = false;
         foreach ($recordings as $rec) {
             $ref = (string) $rec['bbbrecordingid'];
+            $attended = isset($attendedrefs[$ref]);
+            $matchedattendance = $matchedattendance || $attended;
             if (
-                isset($attendedrefs[$ref])
+                $attended
                 || isset($feedbackrefs[$ref])
                 // Guard 1 — no roster for this recording, so absence is unknowable.
                 || !isset($rostered[$ref])
@@ -1354,7 +1598,13 @@ class bbb_adapter extends base_adapter {
         // there as having missed everything. Without this, a site whose session
         // ids do not line up with its recording ids loses every pill the moment
         // its recordings acquire rosters.
-        if (empty($kept) && !empty($attendedrefs)) {
+        //
+        // Keyed on nothing having matched rather than on nothing being kept: a
+        // mismatch where some recordings happen to be unrostered is the same
+        // failure, but guard 1 keeps those recordings and so hides it. The list
+        // then looks unfiltered for no stated reason, which is exactly the
+        // silence this guard exists to break.
+        if (!$matchedattendance && !empty($attendedrefs)) {
             return [
                 'recordings' => $recordings,
                 'reason' => 'unreconciled',
@@ -1560,7 +1810,7 @@ class bbb_adapter extends base_adapter {
 
         $name = trim((string) $rec->get('name'));
         if ($name === '') {
-            $name = format_string($this->bbb->name);
+            $name = format_string($this->bbb->name, true, ['escape' => false]);
         }
 
         // Direct link to BBB's hosted Statistics dashboard (opened target=_blank

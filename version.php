@@ -25,8 +25,8 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_unifiedgrader';
-$plugin->version   = 2026091502; // YYYYMMDDXX format.
-$plugin->release   = '2.11.1+uai.3'; // Upstream 2.11.1 plus this fork's own fixes.
+$plugin->version   = 2026101100; // YYYYMMDDXX format.
+$plugin->release   = '2.12.1+uai.1'; // Upstream 2.12.1 plus downstream fixes.
 $plugin->requires  = 2025041400; // Moodle 5.0+.
-$plugin->supported = [500, 502];  // Moodle 5.0 to 5.2; drives the CI matrix below.
+$plugin->supported = [500, 502];  // Moodle 5.0 to 5.2.
 $plugin->maturity  = MATURITY_STABLE;

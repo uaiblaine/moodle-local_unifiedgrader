@@ -27,8 +27,8 @@ Feature: A save the server refuses is not shown as saved
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
     Then the overall grade shows "15"
-    # "-" blanks the box before the save goes out. The refusal used to leave it
-    # blank and marked as saved, so the student read as ungraded while 15 stood.
+    # "-" blanks the box before the save goes out, so the refusal must put the
+    # stored 15 back; a blank box would read as ungraded while 15 stands.
     When I enter "-" as the overall grade and close the refusal
     # The two blocks need different advice: "--" lifts an override, not a lock.
     Then the refusal said "<message>"
@@ -59,8 +59,8 @@ Feature: A save the server refuses is not shown as saved
     When I type "Feedback with nowhere to go" as the overall feedback
     # Precondition: the edit registered, so the check after the refusal means something.
     Then the Unified Grader has unsaved feedback changes
-    # The refusal used to mark the feedback as saved, which silenced the
-    # leave-page warning and deleted the offline copy.
+    # A refusal must not mark the feedback as saved: that would silence the
+    # leave-page warning and delete the offline copy.
     When I save the grade and close the refusal
     Then the Unified Grader has unsaved feedback changes
 
@@ -69,8 +69,7 @@ Feature: A save the server refuses is not shown as saved
     And the marking panel has loaded
     When I type "Feedback not saved yet" as the overall feedback
     Then the Unified Grader has unsaved feedback changes
-    # Any change to the panel's interface state used to count as the end of a
-    # save, so hiding grades marked this feedback as saved and dropped its
-    # offline copy, with no save having happened.
+    # Only the end of a grade save may mark feedback as saved. Hiding grades
+    # changes the panel's interface state without saving anything.
     When I hide the grades of "Essay 1"
     Then the Unified Grader has unsaved feedback changes

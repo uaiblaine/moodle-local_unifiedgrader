@@ -19,9 +19,9 @@ namespace local_unifiedgrader;
 /**
  * The comment library pages take their access and owner decisions from tested methods.
  *
- * The pages cannot be driven from PHPUnit: they redirect, stream downloads and exit. So the
- * decisions they got wrong now live in library_csv and library_audit, where they are tested, and
- * this test pins that each page still calls those methods instead of deciding inline again.
+ * The pages cannot be driven from PHPUnit: they redirect, stream downloads and exit. So those
+ * decisions live in library_csv and library_audit, where they are tested, and this test pins
+ * that each page calls those methods instead of deciding inline.
  *
  * @package    local_unifiedgrader
  * @category   test
@@ -75,7 +75,7 @@ final class library_pages_test extends \basic_testcase {
     /**
      * Every import notice is built by library_csv::import_result_message(), which names rejected rows.
      *
-     * Two of the three import actions built the notice from the counts alone.
+     * A notice built from the clibcsv_import_result counts alone drops the rejected rows.
      */
     public function test_import_notices_name_rejected_rows(): void {
         $this->assertSame(1, substr_count($this->page('my_library.php'), 'library_csv::import_result_message($result)'));

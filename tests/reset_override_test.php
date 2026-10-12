@@ -216,11 +216,10 @@ final class reset_override_test extends \advanced_testcase {
     /**
      * "--" is refused while the gradebook grade is locked.
      *
-     * The reset clears assign_grades, but a locked cell refuses the gradebook
-     * update and clear_recoverable_gradebook_block() leaves locks alone, so the
-     * reset used to report success with the activity saying "ungraded" while the
-     * gradebook kept the mark. test_double_dash_reset_clears_the_override above is
-     * the control: a guard that refused every reset would fail that one.
+     * A locked cell refuses the gradebook update, so the reset would clear
+     * assign_grades while the gradebook kept the mark; see
+     * base_adapter::is_gradebook_grade_locked(). test_double_dash_reset_clears_the_override
+     * above is the control: a guard that refused every reset would fail that one.
      */
     public function test_double_dash_reset_is_refused_when_the_grade_is_locked(): void {
         global $DB;
@@ -272,10 +271,9 @@ final class reset_override_test extends \advanced_testcase {
     /**
      * "--" still runs under a column lock when the student has no gradebook mark.
      *
-     * Cleaning up after an accidental click on a student who never submitted is
-     * what "--" is for, and with no gradebook grade there is nothing a lock could
-     * keep. The locked test above is the control: a guard that refused every lock
-     * passes that one and fails this one.
+     * With no gradebook grade a lock keeps nothing, and "--" must still clean up after
+     * an accidental click on a student who never submitted. The locked test above is
+     * the control: a guard that refused every lock passes that one and fails this one.
      */
     public function test_double_dash_reset_runs_under_a_lock_when_there_is_no_mark(): void {
         $this->resetAfterTest();

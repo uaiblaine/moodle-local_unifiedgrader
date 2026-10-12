@@ -42,11 +42,10 @@ Feature: Dash escape hatches in the overall grade input
     # Regression for the original "lone - throws PARAM_FLOAT exception"
     # bug — any non-numeric input should be normalised to a clean reset.
     #
-    # A grade is saved first on purpose. Without one this scenario proves almost
-    # nothing: assign_grades starts at -1, so "the grade ends up cleared" holds
-    # whether or not the reset does anything, and the on-screen check only reads
-    # back the value the panel blanked synchronously. That is exactly how the
-    # sibling "-" path stayed broken while looking covered.
+    # A grade is saved first on purpose. Without one the stored grade already
+    # reads as "no grade", so the final check holds whether or not the reset did
+    # anything, and the on-screen check only reads back the value the panel
+    # blanks before sending.
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
     And I enter "15" as the overall grade
@@ -56,11 +55,7 @@ Feature: Dash escape hatches in the overall grade input
     And I should not see "Exception"
     And the saved grade for "student1" on "Essay 1" is ""
 
-  # There is deliberately no "--" scenario here. The deliberate reset differs
-  # from "-" only in what it does to the submission row, and none of that is
-  # observable through the browser: resolve_status() already reports a row with
-  # status "new" as "nosubmission", so the page reads the same before and after,
-  # and remove_submission() never deletes the row anyway. What it really does -
-  # drop the submission plugin data, and only when the grader holds
-  # mod/assign:editothersubmission - is asserted directly against the database
-  # in assign_adapter_test::test_full_reset_strips_the_orphan_only_with_the_capability.
+  # No "--" scenario on purpose: the deliberate reset differs from "-" only in
+  # the submission row, which the page cannot show (resolve_status() already
+  # reports a row with status "new" as "nosubmission"). It is tested against the
+  # database in assign_adapter_test::test_full_reset_strips_the_orphan_only_with_the_capability.

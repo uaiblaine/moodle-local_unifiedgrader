@@ -37,9 +37,9 @@ final class settings_test extends \advanced_testcase {
     /**
      * A manager holding the moderation capability, without moodle/site:config, reaches the page.
      *
-     * The page used to be registered only inside the site-configuration block, so the tree built
-     * for such a manager had no such page and admin_externalpage_setup() refused them, while the
-     * CSV export the page links to already honoured the capability alone.
+     * Inside settings.php's $hassiteconfig block the page would be missing from the tree built for
+     * such a manager, and admin_externalpage_setup() would refuse them, while the CSV export the
+     * page links to checks the capability alone.
      */
     public function test_manager_with_the_capability_can_reach_the_moderation_page(): void {
         global $DB;
@@ -62,8 +62,8 @@ final class settings_test extends \advanced_testcase {
     /**
      * A manager reaches the system-defaults page through its own capability too.
      *
-     * The manager archetype holds local/unifiedgrader:managesystemdefaults, but the page was
-     * registered only for users with moodle/site:config, so it refused every manager.
+     * The manager archetype holds local/unifiedgrader:managesystemdefaults but not
+     * moodle/site:config, so the page must be registered outside the $hassiteconfig block.
      */
     public function test_manager_with_the_capability_can_reach_the_system_defaults_page(): void {
         global $DB;

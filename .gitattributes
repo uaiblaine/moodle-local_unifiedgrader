@@ -1,22 +1,26 @@
-# Release hygiene — `git archive HEAD` builds the install zip, so every tracked
-# path lands in the package unless it is export-ignore'd here. These paths are
-# versioned for development/CI/collaboration but are NOT needed to run the
-# plugin on a Moodle site, so they are stripped from the release zip.
-# Note: tests/ SHIPS in the release (Moodle convention) — do not ignore it.
+# Files that belong in the repository but not in a release zip.
 #
-# Verify with:  git check-attr export-ignore -- <path>
-# (a path marked "set" is excluded from the archive; "unspecified" ships).
-
-/.claude              export-ignore
-/.DS_Store            export-ignore
-/.gitattributes       export-ignore
-/.github              export-ignore
-/.gitignore           export-ignore
+# `git archive` honours export-ignore, so ./deploy.sh --zip gets its exclusion
+# list from here rather than from a list of rm commands someone has to remember.
+# Anything untracked (vendor/, .git/) is absent from a git archive already.
+#
+# tests/ is deliberately NOT listed. The Moodle Marketplace package should carry
+# it: the prechecker does not run PHPUnit, but reviewers and site admins expect
+# a plugin's tests to ship with it, and it costs 184K compressed. ./deploy.sh
+# --zip --slim strips it when a leaner production package is wanted.
+#
+# Verify with: git check-attr export-ignore -- <path>
+/.github            export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/.eslintrc          export-ignore
+/deploy.sh          export-ignore
+/composer.json      export-ignore
+/.claude            export-ignore
+/.DS_Store          export-ignore
 /.moodle-plugin-ci.yml export-ignore
-/.phpcsignore         export-ignore
-/.stylelintrc.json    export-ignore
-/CLAUDE.md            export-ignore
-/deploy.sh            export-ignore
-/docs                 export-ignore
-/phpcs.xml            export-ignore
-/.eslintrc            export-ignore
+/.phpcsignore       export-ignore
+/.stylelintrc.json  export-ignore
+/CLAUDE.md          export-ignore
+/docs               export-ignore
+/phpcs.xml          export-ignore

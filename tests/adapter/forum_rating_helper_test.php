@@ -411,12 +411,9 @@ final class forum_rating_helper_test extends \advanced_testcase {
     /**
      * "--" on a rating forum still withdraws the marker's ratings under a gradebook lock.
      *
-     * The web service refuses "--" while a locked gradebook grade holds a mark,
-     * because most resets would then clear the activity's grade while the gradebook
-     * kept it. A rating forum shows the gradebook's own grade, so its reset cannot
-     * diverge that way, and forum_adapter::reset_blocked_by_lock() lets it through.
-     * The preconditions matter: the cell is locked and holds a mark, which is
-     * exactly what the default guard refuses.
+     * The web service refuses "--" while a locked gradebook grade holds a mark; a rating
+     * forum is exempt, see forum_adapter::reset_blocked_by_lock(). The preconditions put
+     * the cell in the state the default guard refuses: locked and holding a mark.
      */
     public function test_reset_withdraws_ratings_under_a_gradebook_lock(): void {
         global $DB;

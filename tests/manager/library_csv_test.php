@@ -345,10 +345,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * The bucket owner check compares ids as ints.
      *
-     * export_library_csv.php passes the requested owner, cleaned as PARAM_INT, and $USER->id,
-     * which the database returns as a string. Compared raw and strictly they never matched, so
-     * a teacher was asked for the moderation capability to export their own bucket. This tests the
-     * method; library_pages_test is what checks that the page still calls it.
+     * The viewer id is passed as the string the database returns for $USER->id; see
+     * library_csv::is_bucket_owner(). library_pages_test checks that export_library_csv.php calls it.
      */
     public function test_is_bucket_owner_compares_ids_as_ints(): void {
         $this->resetAfterTest();
@@ -361,8 +359,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * A UTF-8 byte order mark before the header does not hide the first column.
      *
-     * Excel's "CSV UTF-8" writes one. It used to become part of the first header name, so a
-     * cross-owner file lost its ownerid column and every row went to the fallback owner.
+     * Excel's "CSV UTF-8" writes one. Left in place it becomes part of the first header name, so a
+     * cross-owner file loses its ownerid column and every row goes to the fallback owner.
      */
     public function test_import_strips_a_utf8_byte_order_mark(): void {
         global $DB;
@@ -382,8 +380,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * Cells in Windows-1252, what Excel on Windows writes for plain "CSV", are converted.
      *
-     * They used to reach the duplicate-check query as invalid UTF-8, which PostgreSQL rejects,
-     * aborting the import part way through.
+     * Unconverted, they reach the database as invalid UTF-8, which PostgreSQL rejects, aborting
+     * the import part way through.
      */
     public function test_import_converts_windows_1252_cells(): void {
         global $DB;
@@ -427,7 +425,7 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * A course code longer than its column is a row error, and the import carries on.
      *
-     * The insert used to throw, taking the rest of the file with it.
+     * Without the check the insert throws and takes the rest of the file with it.
      */
     public function test_import_reports_a_course_code_longer_than_the_column(): void {
         global $DB;
@@ -446,7 +444,7 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * A tag longer than its column is a row error raised before the comment is written.
      *
-     * The comment used to be inserted first, so the failing tag insert left it behind, untagged.
+     * The comment is inserted before its tags, so a failing tag insert would leave it behind, untagged.
      */
     public function test_import_reports_a_tag_longer_than_the_column_before_writing_the_comment(): void {
         global $DB;
@@ -538,8 +536,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * The duplicate check tells course codes apart by case, on every database.
      *
-     * On MariaDB the old query's collation treated 'bib3129' as the existing 'BIB3129' and
-     * skipped the row, which PostgreSQL imported.
+     * MariaDB's collation compares 'bib3129' and 'BIB3129' as equal, so an SQL duplicate check
+     * would skip the row there and import it on PostgreSQL.
      */
     public function test_import_duplicate_check_is_case_exact(): void {
         global $DB;
@@ -562,8 +560,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * A bucket export contains that bucket only, not a trailing-space variant of its code.
      *
-     * Only MariaDB, whose collation ignores trailing spaces, exported both buckets before the code
-     * was matched in PHP; PostgreSQL never did, so this fails on the old code on MariaDB alone.
+     * MariaDB's collation ignores trailing spaces, so an SQL equality on the code would export both
+     * buckets there; on PostgreSQL this test cannot fail.
      */
     public function test_bucket_export_matches_the_course_code_exactly(): void {
         $this->resetAfterTest();
@@ -581,9 +579,9 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * A cell that merely starts with a quote keeps it on import.
      *
-     * Files exported before cells were quoted, or written by hand, hold such a cell as it is.
-     * Removing the quote turned "'Tis well argued" into a different comment, so re-importing a
-     * backup added a second, altered copy instead of skipping the one already there.
+     * Files written by hand, or exported before cells were quoted, hold such a cell as it is; see
+     * library_csv::unescape_cell(). Removing the quote would make re-importing such a file add a
+     * second, altered copy instead of skipping the comment already there.
      */
     public function test_import_keeps_a_leading_quote_that_is_not_an_escape(): void {
         global $DB;
@@ -606,8 +604,8 @@ final class library_csv_test extends \advanced_testcase {
     /**
      * The import notice names the rejected rows as well as the counts.
      *
-     * The teacher's own import and the bucket import built their notice from the counts alone, so a
-     * row rejected for its encoding or a value too long for its column disappeared without a word.
+     * A row rejected for its encoding or a value too long for its column is neither imported nor
+     * skipped, so a notice built from the two counts alone would not mention it.
      */
     public function test_import_result_message_names_rejected_rows(): void {
         $this->resetAfterTest();

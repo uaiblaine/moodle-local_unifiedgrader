@@ -427,23 +427,14 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
-     * Clearing a grade must not be a silent no-op when the gradebook cell is
-     * overridden.
+     * Clearing a grade is refused, not silently dropped, when the gradebook cell is overridden.
      *
-     * Sibling of test_save_grade_persists_when_gradebook_overridden above, and
-     * the two used to disagree. Saving a VALUE under an override works: the
-     * adapter lifts a recoverable override first, so the mark lands. Clearing
-     * did not, and could not - the recovery is deliberately skipped for a pure
-     * clear (lifting an override there would drop a penalty the teacher never
-     * asked to drop), and core then refuses the write itself, because
-     * apply_grade_to_user() wraps it in if (!$gradingdisabled) and
-     * grading_disabled() is true whenever the cell is locked or overridden.
-     *
-     * So the clear reported success and changed nothing - the same silent
-     * failure fixed in v2.8.5, reached by a different route. It now refuses out
-     * loud instead, which is the honest outcome: the teacher is told why, and
-     * the deliberate "--" reset (reset_grade_and_submission) is the path that
-     * does lift the override when that is really what they want.
+     * Saving a value under an override works (test_save_grade_persists_when_gradebook_overridden
+     * above): the adapter lifts the override first. A pure clear does not lift it, since that
+     * would drop a penalty the teacher never asked to drop, and core's apply_grade_to_user()
+     * skips the write while grading_disabled() is true. So the clear throws; the "--" reset
+     * (reset_grade_and_submission()) is the path that lifts the override. See
+     * assign_adapter::save_grade().
      */
     public function test_clearing_a_grade_is_refused_when_the_gradebook_is_overridden(): void {
         global $CFG;
@@ -499,13 +490,11 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
-     * A clear refused because the gradebook grade is LOCKED says so.
+     * A clear refused because the gradebook grade is locked says so.
      *
-     * The overridden case above suggests "--", which lifts an override. Nothing in
-     * the grader can lift a lock, and "--" is refused for one too, so offering it
-     * here sent teachers round in a circle. The test above pins the override
-     * message; this one pins the lock message, so a refusal that always picked one
-     * of the two fails one of them.
+     * The override message suggests "--", which cannot lift a lock and is itself refused
+     * under one. The test above pins the override message and this one the lock message,
+     * so a refusal that always picked one of the two fails one of them.
      */
     public function test_clearing_a_grade_is_refused_with_the_lock_message_when_the_grade_is_locked(): void {
         global $CFG;
@@ -552,22 +541,13 @@ final class assign_adapter_test extends \advanced_testcase {
      * The "--" deliberate reset clears the grade, but only strips the orphan
      * submission when the grader may edit other people's submissions.
      *
-     * Two legs on purpose, because the first alone would read as "the reset
-     * works" when half of it silently did nothing.
+     * assign::remove_submission() requires mod/assign:editothersubmission for another
+     * user's submission, a capability core grants to no archetype, not even manager. So on
+     * a default site "--" acts like "-": the grade goes, the row and its plugin data stay.
+     * The first leg pins that, the second the reset with the capability.
      *
-     * remove_submission() is gated on can_edit_submission(), which for another
-     * user's submission requires mod/assign:editothersubmission - a capability
-     * core defines with RISK_DATALOSS and grants to NO archetype, not even
-     * manager. So on a default site the submission half of the reset is inert,
-     * and "--" behaves exactly like "-": the grade goes, the row and its
-     * plugin data stay. Nothing here is broken; the capability is simply not
-     * held, and this test says so out loud instead of leaving the difference
-     * to be discovered in the field.
-     *
-     * Note what does NOT happen even with the capability: the row is never
-     * deleted. remove_submission() resets status to new/reopened and asks each
-     * submission plugin to drop its data (mod/assign/locallib.php), which is
-     * why an assertion of the "no submission row remains" shape can never hold.
+     * Even with the capability the row is not deleted: remove_submission() resets its
+     * status to new (or reopened) and asks each submission plugin to drop its data.
      */
     public function test_full_reset_strips_the_orphan_only_with_the_capability(): void {
         global $DB, $CFG;
@@ -1143,5 +1123,37 @@ final class assign_adapter_test extends \advanced_testcase {
 
         $latest = $s->adapter->prepare_feedback_draft($studentid, $draftitemid, -1);
         $this->assertStringContainsString('Attempt two feedback', $latest['feedbackhtml']);
+    }
+
+    /**
+     * An activity name containing an ampersand comes back as plain text.
+     *
+     * Every sink this value reaches escapes it — Mustache's {{ }} in the header,
+     * textContent in the marking panel, encodeURIComponent in the report-form
+     * URL — so escaping it here as well is what put a literal "&amp;" on screen.
+     */
+    public function test_activity_name_is_not_html_escaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief & Loss Counselling']]);
+        $info = $s->adapter->get_activity_info();
+
+        $this->assertSame('Grief & Loss Counselling', $info['name']);
+        $this->assertStringNotContainsString('&amp;', $info['name']);
+    }
+
+    /**
+     * Turning escaping off does not let markup through: format_string() strips
+     * tags whatever the escape option says, so the unescaped name is still safe
+     * to hand to a sink that will escape it once.
+     */
+    public function test_activity_name_still_strips_markup_when_unescaped(): void {
+        $this->resetAfterTest();
+
+        $s = $this->create_scenario(['modparams' => ['name' => 'Grief <script>alert(1)</script> Loss']]);
+        $info = $s->adapter->get_activity_info();
+
+        $this->assertStringNotContainsString('<script>', $info['name']);
+        $this->assertStringNotContainsString('</script>', $info['name']);
     }
 }

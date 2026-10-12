@@ -19,18 +19,14 @@ namespace local_unifiedgrader;
 /**
  * Every badge must state its own text colour.
  *
- * Bootstrap 5's .badge defaults its colour to white, so a badge on a LIGHT background
- * renders white on near-white. Measured on a running Moodle 5.2 site against the 4.5:1
- * WCAG AA floor: bg-secondary gives 1.49:1 and bg-warning gives 1.95:1. Both are well
- * below the floor and neither is visible to any other gate - phpcs, the mustache lint
- * and stylelint never read a class name for meaning, and the rendered contrast is not
- * something Behat asserts. A 2026-08-07 sweep found 41 such badges in this plugin.
+ * Bootstrap 5's .badge defaults its colour to white, so a badge on a light background
+ * fails the 4.5:1 WCAG AA floor: with Boost's colours, white on bg-secondary is 1.49:1
+ * and on bg-warning 1.95:1. No other check catches this: phpcs, the Mustache lint and
+ * stylelint do not read class names for meaning, and Behat does not assert contrast.
  *
- * The mirror of the same defect exists on Bootstrap 4 (Moodle 4.5), where .badge sets
- * no colour at all and a SATURATED background renders near-black text on a dark fill.
- * This plugin requires Moodle 5.0+, so only the light-background half can occur here -
- * but the rule is written for both, because the only markup that is correct on either
- * branch is markup that states its colour explicitly.
+ * On Bootstrap 4 (Moodle 4.5) .badge sets no colour, so a saturated background gets
+ * near-black text instead. This plugin requires Moodle 5.0, so only the light-background
+ * case can occur, but stating the colour explicitly is correct on both.
  *
  * @package    local_unifiedgrader
  * @category   test
@@ -77,10 +73,8 @@ final class badge_contrast_test extends \basic_testcase {
     /**
      * Every file whose contents can put a class name in front of a user.
      *
-     * The top-level pages count too. The comment library moderation pages that arrived
-     * with upstream v2.10.0 print their badges straight through html_writer from the
-     * plugin root, outside every directory this scan used to read, and five of them
-     * shipped without a text colour.
+     * The top-level pages count too: the comment library pages (moderate_libraries.php,
+     * my_library.php, ...) print their badges through html_writer from the plugin root.
      *
      * @return array List of absolute file paths.
      */
@@ -121,18 +115,16 @@ final class badge_contrast_test extends \basic_testcase {
                     continue;
                 }
                 /*
-                 * Code that DETECTS these classes in incoming HTML is not code that emits
-                 * them - forum_adapter matches on bg-danger and friends to classify a post's
-                 * existing markup, and flagging it would be a false positive with no fix.
+                 * Code that detects these classes in existing HTML does not emit them:
+                 * forum_adapter matches bg-danger and similar classes to classify a post's markup.
                  */
                 if (preg_match('/preg_(match|replace|split|quote)|new RegExp/', $line)) {
                     continue;
                 }
                 foreach ($this->required_text_colour() as $background => $required) {
                     /*
-                     * Not preceded by "text-": text-bg-warning is Bootstrap 5.2's combined
-                     * utility, which sets the background AND a colour chosen for contrast, so
-                     * it already satisfies this rule on its own.
+                     * Not preceded by "text-": Bootstrap 5.2's text-bg-* utility sets the
+                     * background and a contrasting colour, so it satisfies the rule on its own.
                      */
                     if (!preg_match('/(?<!text-)\b' . preg_quote($background, '/') . '\b(?!-subtle)/', $line)) {
                         continue;
@@ -142,13 +134,9 @@ final class badge_contrast_test extends \basic_testcase {
                     }
                 }
                 /*
-                 * Bootstrap 5.3's subtle backgrounds are LIGHT, so the default white
-                 * badge text fails on them exactly as it does on bg-secondary. They
-                 * ship a matching foreground - text-primary-subtle pairs with
-                 * text-primary-emphasis - and that pairing is what makes them legible.
-                 * Excluded from the saturated list above by the (?!-subtle) lookahead,
-                 * because bg-primary-subtle is a different colour from bg-primary and
-                 * wants a different answer, not text-white.
+                 * Bootstrap 5.3's bg-*-subtle backgrounds are light, so white badge text fails
+                 * on them as on bg-secondary; each pairs with its text-*-emphasis colour. The
+                 * (?!-subtle) lookahead above keeps them out of the saturated check.
                  */
                 if (preg_match_all('/\bbg-([a-z]+)-subtle\b/', $line, $subtle)) {
                     foreach ($subtle[1] as $hue) {

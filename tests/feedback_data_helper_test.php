@@ -222,4 +222,53 @@ final class feedback_data_helper_test extends \advanced_testcase {
         $this->assertStringContainsString('Reference needed here', $second['displayhtml']);
         $this->assertSame(s('a later phrase'), $second['anchortext']);
     }
+
+    /**
+     * The shared grading keys carry every field the feedback templates read.
+     */
+    public function test_grading_template_data_covers_every_template_key(): void {
+        $parsed = feedback_data_helper::parse_grading_data([], \context_system::instance());
+        $data = feedback_data_helper::grading_template_data($parsed);
+
+        foreach (
+            [
+            'hasrubric', 'rubriccriteria', 'rubrictotal',
+            'hasguide', 'guidecriteria', 'guidetotal', 'guidemaxtotal',
+            'hasadvancedgrading', 'gradingmethodname',
+            ] as $key
+        ) {
+            $this->assertArrayHasKey($key, $data);
+        }
+    }
+
+    /**
+     * Every feedback view must merge the grading keys into its template context.
+     *
+     * view_feedback.php builds a separate context per activity type, and in
+     * v2.12.0 the BigBlueButton branch parsed its grading data and then failed
+     * to pass it on — so a student saw the overall feedback with no rubric or
+     * marking guide beside it, while the same criteria appeared in the PDF. The
+     * surrounding lines are identical in all four branches, which is what hid
+     * it. This asserts the wiring rather than the rendering, because the branch
+     * that broke is in a script no unit test can execute.
+     */
+    public function test_every_feedback_view_merges_the_grading_keys(): void {
+        global $CFG;
+
+        $src = file_get_contents($CFG->dirroot . '/local/unifiedgrader/view_feedback.php');
+        $this->assertNotFalse($src);
+
+        $renders = preg_match_all(
+            "~render_from_template\('local_unifiedgrader/feedback_view~",
+            $src
+        );
+        $merges = preg_match_all('~\$templatedata \+= .*grading_template_data\(~', $src);
+
+        $this->assertGreaterThan(0, $renders, 'Expected feedback views to render');
+        $this->assertSame(
+            $renders,
+            $merges,
+            'Each feedback view must merge grading_template_data() into its context'
+        );
+    }
 }

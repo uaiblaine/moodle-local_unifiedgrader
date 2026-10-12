@@ -15,3 +15,11 @@ Thumbs.db
 *.swp
 *.swo
 .gitnexus
+
+# Composer (dev tooling only - moodle-cs for local coding-standard checks).
+# The lock file is deliberately not tracked: CI installs its own moodle-cs with
+# moodle-plugin-ci, so pinning ours would let the local ruleset drift behind the
+# one CI actually enforces - which is the whole thing this tooling is here to
+# prevent. `composer install` resolves the newest matching release instead.
+/vendor/
+/composer.lock

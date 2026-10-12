@@ -28,10 +28,10 @@ defined('MOODLE_INTERNAL') || die();
 // plugins" so the settings page and the "Manage system defaults" tool
 // sit together as siblings instead of being scattered.
 //
-// Added for every user, not only site administrators: core loads each local
-// plugin's settings.php for everyone who builds the admin tree, and the two
-// tool pages below have to be reachable by a manager who holds their
-// capability without holding moodle/site:config.
+// The category and the two tool pages are added outside the $hassiteconfig
+// block: core includes a local plugin's settings.php for every user who
+// builds the admin tree, and each page's own capability decides access. The
+// manager archetype holds both capabilities but not moodle/site:config.
 $ADMIN->add('localplugins', new admin_category(
     'local_unifiedgrader_cat',
     get_string('pluginname', 'local_unifiedgrader'),
@@ -41,11 +41,6 @@ $ADMIN->add('localplugins', new admin_category(
 // library entries are scoped by a free-text course code rather than a
 // foreign key, so this is the only place an admin can see entries that
 // have drifted out of reach of their owner.
-//
-// Registered outside the site-configuration block below. The page's own
-// capability is what decides access; inside that block a manager granted
-// local/unifiedgrader:moderatelibraries was refused the page while the CSV
-// export the page links to already let them export every library.
 $ADMIN->add('local_unifiedgrader_cat', new admin_externalpage(
     'local_unifiedgrader_moderatelibraries',
     get_string('clibmod_pagename', 'local_unifiedgrader'),
@@ -55,9 +50,7 @@ $ADMIN->add('local_unifiedgrader_cat', new admin_externalpage(
 
 // External page: manage system-default tags and comments. Sibling of
 // the settings page under the Unified Grader category — where admins
-// expect plugin-specific tools to live. Outside the site-configuration
-// block for the same reason as the moderation page: the manager archetype
-// holds local/unifiedgrader:managesystemdefaults but not moodle/site:config.
+// expect plugin-specific tools to live.
 $ADMIN->add('local_unifiedgrader_cat', new admin_externalpage(
     'local_unifiedgrader_systemdefaults',
     get_string('manage_system_defaults', 'local_unifiedgrader'),

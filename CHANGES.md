@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.12.1+uai.1 (2026101100)
+
+Merge of the upstream v2.12.0 and v2.12.1 releases into this fork: BigBlueButton sessions scoped to the ones a
+student could have attended, the marking guide in the student's feedback view, the redesigned feedback PDF, and
+course and activity names no longer double-escaped. Upstream changed none of the code behind this fork's fixes
+(v2.8.5 to v2.11.1+uai.3), and none of the items this fork recorded as open; all of them survive unchanged. Its
+escaping change touches only values that reach sinks which escape on their own, and no fork fix depended on the
+escaped form.
+
+### Fork rules applied to upstream's new code
+
+- **Lang file ordering.** v2.12.0 added `feedback_summary_page_of`, `feedback_summary_recording_comments` and
+  `feedback_summary_sessions_total` ahead of the rest of the `feedback_summary_` block in all 13 languages, which
+  `moodle.Files.LangFilesOrdering` reports and this fork's `--max-warnings 0` turns into a failure. The block is
+  now in order.
+- **Badges.** The rubric and marking-guide block that v2.12.0 added to `feedback_view_quiz.mustache` printed three
+  badges with no text colour, which `tests/badge_contrast_test.php` rejects. They now match the same badges in
+  `feedback_view.mustache`.
+- **CI.** The fork keeps its own matrix (PHP 8.3 and 8.4 on every branch in `$plugin->supported`) and takes
+  upstream's PostgreSQL 17 and MariaDB 11.4 services with the new MariaDB healthcheck. Upstream's single Moodle 5.3
+  job on core's `main` is left out, since this fork does not declare 5.3 yet.
+- `.gitattributes`: upstream's release exclusions and this fork's are combined.
+
+### Comments
+
+The comments this fork added since upstream were audited against the code. Thirty-one that no longer matched
+it were corrected (stale method names, a save path that moved, a test that scans more than its comment said),
+and references to the development environment were removed. Upstream's own comments are unchanged except
+where a fork change had made one false. No code changed; `amd/build` differs only in the source map.
+
 ## v2.11.1+uai.3 (2026091502)
 
 Fixes to the comment library moderation and CSV tools that upstream added in v2.10.0 and v2.11.0,
@@ -160,6 +190,59 @@ And one in this fork's own v2.8.8: its refusal message suggests typing `--`, whi
 **locked** gradebook grade while the gradebook keeps the mark.
 
 The quiz grading-method issue recorded under v2.9.4+uai.1 is unchanged: nothing merged here touches it.
+## v2.12.1 (2026092300)
+
+### Marking guide missing from the student's BBB feedback view
+
+v2.12.0 parsed the grading data in the BigBlueButton branch of `view_feedback.php` but never passed it to the template, so the rubric and marking guide reached the downloadable PDF and not the screen. The four branches end in identical lines, and the edit landed on the quiz one.
+
+The nine template keys are now produced by `feedback_data_helper::grading_template_data()` and merged by every branch, so a branch that omits them is visible at a glance. `tests/feedback_data_helper_test.php` asserts each `render_from_template()` call site has its merge — reintroducing the defect fails that test.
+
+## v2.12.0 (2026092200)
+
+BigBlueButton graders were offered every session on the activity, students could not see the marking guide behind their grade, the feedback PDF is redesigned, and an ampersand in a course name reached the screen as `&amp;`.
+
+### Sessions a student was never in
+
+Attendance *is* the submission on BBB, so a session the student did not attend is not theirs to be marked on. The existing filter compares BBB recording ids against attendance ids; where a site's analytics callback reports a `recordid` matching no recording, nothing reconciles and every session stays visible.
+
+- Group membership is now checked first. Under separate groups each recording carries the group it ran for, so a student outside that group could not have joined — decided from enrolment data rather than a roster BBB may never have sent.
+- Ungrouped sessions, and any recording carrying the student's own feedback, are always kept.
+- Under visible groups or no groups the pass stands down: a student may then join another group's meeting, so membership proves nothing.
+- A student in no group keeps every session and is told why.
+- The "ids do not reconcile" notice now fires whenever nothing matches, not only when the filter empties the list.
+
+### Double-escaped course and activity names
+
+`format_string()` escaped these values and the output layer escaped them again, so "Grief & Loss" reached the screen as "Grief &amp; Loss". They all flow into sinks that escape on their own — Mustache, `textContent`, `encodeURIComponent`, TCPDF's literal `Cell()` — so `format_string()` now runs with `'escape' => false` at each source.
+
+Affects course short and full names, activity names across all four adapters, BBB session labels, forum subjects and discussion names, quiz criterion shortnames, and group names in the filter. Two cases where the entity reached data rather than a screen are also fixed: the impropriety report form's URL parameters, and the PDF header. Calls feeding raw HTML are unchanged.
+
+### Marking guide in the student's feedback view
+
+The BBB branch of `view_feedback.php` never parsed its grading data and rendered through a template with no rubric or guide markup, so students saw the overall feedback alone — the per-criterion scores and remarks reached them only in the PDF. The right-hand column now opens for a marking guide even with no written feedback.
+
+A student reading their own BBB feedback also sees every session's figures at once, totals then one block per session, rather than the grader's one-at-a-time switcher.
+
+### Feedback summary PDF
+
+Shared by every adapter, so assignments, forums, quizzes and BBB sessions all open the same way.
+
+- Score and overall feedback side by side: the grade as a donut on the left, the teacher's comments on the right.
+- Site logo is drawn into the header band, taken from Moodle's own settings. SVG logos are skipped — TCPDF cannot read them.
+- Engagement figures as dashboard tiles: an emphasised totals row, then one row per attended session, each carrying all six metrics.
+- Font Awesome icons on each tile and section heading, converted from the TrueType original Moodle ships.
+- Recording annotations listed as timestamped text. Previously the PDF dumped the grading pane's Bootstrap markup into TCPDF, which ignores the class hiding unselected sessions, so every session rendered at once under a player a PDF cannot play.
+- Footer on every page, with a page number. It was painted once, before the annotation pages existed.
+- "Graded on [[strftimedatefull]]" fixed — not a core string.
+
+### Deployment
+
+`deploy.sh` takes a list of Moodle installs rather than one. AMD is built on the first and shipped to the rest, so every install runs identical JavaScript.
+
+### Coverage
+
+`tests/adapter/bbb_adapter_test.php` gains twelve tests covering the group filter, the reconciliation notice, the feedback report and the student's stacked session tiles; `assign_adapter_test.php` adds two for the unescaped activity name. Two new files: `tests/pdf/feedback_summary_pdf_test.php` (grade bands, engagement, annotations, logo, page breaks) and `tests/feedback_data_helper_logo_test.php` (logo lookup order, SVG skip, unconfigured site).
 
 ## v2.11.1 (2026091000)
 

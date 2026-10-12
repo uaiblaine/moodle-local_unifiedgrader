@@ -25,16 +25,16 @@ Feature: The quiz total is a readout, not an entry field
     And I log in as "teacher1"
 
   Scenario: The quiz grade box is read-only and says where its value comes from
-    # quiz_grades is derived state — mod_quiz recomputes it from the attempt
-    # marks, so a typed total has nowhere to live and was silently discarded.
+    # mod_quiz derives quiz_grades from the attempt marks, so a typed total
+    # cannot be stored.
     When I am on the Unified Grader for activity "Pop quiz"
     And the marking panel has loaded
     Then the overall grade box is read-only
     And I should see "Calculated from the question marks below"
 
   Scenario: An assignment grade box is still editable
-    # The control. Without it the scenario above passes just as well if the box
-    # were read-only everywhere, or if the readonly rule fired on every activity.
+    # The control: without it the scenario above would also pass if the box were
+    # read-only on every activity.
     When I am on the Unified Grader for activity "Essay 1"
     And the marking panel has loaded
     Then the overall grade box is editable
