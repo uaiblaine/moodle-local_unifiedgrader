@@ -565,13 +565,7 @@ class behat_local_unifiedgrader extends behat_base {
      * @param string $score
      */
     public function i_set_the_rubric_score_for(string $criterion, string $score): void {
-        // The criterion header is .fw-bold sibling to the score input.
-        // Find the row containing the heading text, then the input within.
-        $xpath = "//div[contains(@class,'border-bottom')"
-            . " and .//div[contains(@class,'fw-bold') and normalize-space(text())="
-            . behat_context_helper::escape($criterion)
-            . "]]"
-            . "//input[@data-criterionid and not(@data-levelid)]";
+        $xpath = $this->guide_score_xpath($criterion);
 
         // Re-find the input on every attempt and retry until the score sticks:
         // _renderGuide() rebuilds the criterion rows when the definition arrives
@@ -594,6 +588,23 @@ class behat_local_unifiedgrader extends behat_base {
             [],
             self::get_timeout()
         );
+    }
+
+    /**
+     * XPath of a marking-guide criterion's score input, found by the criterion heading.
+     *
+     * The heading is the .fw-bold sibling of the score input: the row holding the
+     * heading text is found first, then the input within it.
+     *
+     * @param string $criterion Criterion shortname, as shown in its heading.
+     * @return string
+     */
+    private function guide_score_xpath(string $criterion): string {
+        return "//div[contains(@class,'border-bottom')"
+            . " and .//div[contains(@class,'fw-bold') and normalize-space(text())="
+            . behat_context_helper::escape($criterion)
+            . "]]"
+            . "//input[@data-criterionid and not(@data-levelid)]";
     }
 
     /**
@@ -1114,5 +1125,471 @@ class behat_local_unifiedgrader extends behat_base {
             return;
         }
         set_config($setting, $value);
+    }
+
+    /**
+     * Open the Unified Grader for an assignment with the given student selected.
+     *
+     * For scenarios with more than one student: which one the grader opens on
+     * otherwise depends on the participant sort order.
+     *
+     * Example:
+     *   When I am on the Unified Grader for activity "Essay 1" grading "student1"
+     *
+     * @Given /^I am on the Unified Grader for activity "(?P<activity>[^"]+)" grading "(?P<student>[^"]+)"$/
+     * @param string $activity Assignment name.
+     * @param string $student Student username.
+     */
+    public function i_am_on_the_unified_grader_for_activity_grading(string $activity, string $student): void {
+        $url = new moodle_url('/local/unifiedgrader/grade.php', [
+            'cmid' => $this->assign_cmid($activity),
+            'userid' => $this->user_id($student),
+        ]);
+        $this->execute('behat_general::i_visit', [$url]);
+    }
+
+    /**
+     * Hold every grade save's response in the browser for a while before the grader sees it.
+     *
+     * The request reaches the server at once; only its answer is delayed, so a
+     * scenario can act while a save is in flight across steps that the real round
+     * trip would finish too quickly for. Lasts until the page is reloaded. See
+     * patch_grade_saves().
+     *
+     * @Given /^grade saves in the Unified Grader take (?P<seconds>\d+) seconds to come back$/
+     * @param string $seconds Delay in whole seconds.
+     */
+    public function grade_saves_take_seconds_to_come_back(string $seconds): void {
+        $ms = 1000 * (int) $seconds;
+        $this->patch_grade_saves(
+            "function(original, ajax, args) {"
+            . "var sent = original.apply(ajax, args)[0];"
+            . "return new Promise(function(resolve, reject) {"
+            . "sent.then(function(r) { setTimeout(function() { resolve(r); }, {$ms}); },"
+            . " function(e) { setTimeout(function() { reject(e); }, {$ms}); });"
+            . "});"
+            . "}"
+        );
+    }
+
+    /**
+     * Make every grade save fail the way a dropped connection does, without reaching the server.
+     *
+     * The rejection carries no errorcode, which is what saveGrade in mutations.js
+     * reads as a network failure: the payload goes to SaveQueue for a retry,
+     * which fails the same way. A server refusal carries one and takes the
+     * refusal path instead. Lasts until the page is reloaded.
+     *
+     * @Given /^the network drops grade saves in the Unified Grader$/
+     */
+    public function the_network_drops_grade_saves(): void {
+        $this->patch_grade_saves(
+            "function() { return Promise.reject(new Error('Simulated network failure')); }"
+        );
+    }
+
+    /**
+     * Route the grader's local_unifiedgrader_save_grade calls through a handler.
+     *
+     * Wraps core/ajax call() on the page. The grader's modules call it through the
+     * module's default export, which on Moodle 5.3 (an ES module) is a separate
+     * object from the module and on earlier branches is the module itself. Every
+     * other call, and any batch, goes through untouched; the grader always sends a
+     * grade save on its own.
+     *
+     * @param string $handler JS function(original, ajax, args) returning the save's promise.
+     */
+    private function patch_grade_saves(string $handler): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $this->execute_script(
+            "(function(){"
+            . "var m = require('core/ajax');"
+            . "var ajax = m && m.__esModule && m.default ? m.default : m;"
+            . "if (!ajax.behatOriginalCall) { ajax.behatOriginalCall = ajax.call; }"
+            . "var original = ajax.behatOriginalCall;"
+            . "var handle = {$handler};"
+            . "ajax.call = function(requests) {"
+            . "if (!requests || requests.length !== 1"
+            . " || requests[0].methodname !== 'local_unifiedgrader_save_grade') {"
+            . "return original.apply(ajax, arguments);"
+            . "}"
+            . "return [handle(original, ajax, arguments)];"
+            . "};"
+            . "})();"
+        );
+    }
+
+    /**
+     * Type a grade and leave the box, which saves, then correct it and press "next
+     * student" while that save is still in flight.
+     *
+     * The correction is never left, so only the save the navigator requests before
+     * switching can carry it. One synchronous script, for the reason given at
+     * i_enter_and_correct_the_grade_before_the_save_lands(); a scenario delays the
+     * save's response with "grade saves ... take N seconds to come back", or the
+     * first save could land before the navigator's pause ends and the request
+     * would not overlap it.
+     *
+     * @When /^I enter "([^"]*)" as the overall grade, correct it to "([^"]*)", and go to the next student before the save lands$/
+     * @param string $first Grade typed and saved first.
+     * @param string $second Correction typed during that save's round trip.
+     */
+    public function i_enter_correct_and_go_to_the_next_student(string $first, string $second): void {
+        $this->execute('behat_general::wait_until_exists', ['[data-action="grade-input"]', 'css_element']);
+        $a = json_encode($first);
+        $b = json_encode($second);
+        $this->execute_script(
+            "(function(){"
+            . "var input = document.querySelector('[data-action=\"grade-input\"]');"
+            . "function type(v) { input.value = v; input.dispatchEvent(new Event('input', {bubbles: true})); }"
+            . "type({$a});"
+            . "input.dispatchEvent(new Event('focusout', {bubbles: true}));"
+            . "type({$b});"
+            . "document.querySelector('[data-action=\"next-student\"]').click();"
+            . "})();"
+        );
+    }
+
+    /**
+     * Type a grade and leave the box, which saves, press "next student", and type a
+     * grade for the next student as soon as it has loaded, while a save for the
+     * first student is still in flight.
+     *
+     * The navigator asks for a save before switching; with one in flight that
+     * request is held, run when the first save ends, and the navigator then loads
+     * the next student while the held save is still out. The second grade is typed
+     * into the next student's box without leaving it, so it stays unsaved.
+     *
+     * The second grade must land inside that window, and Behat waits for every
+     * pending save between steps, so this step arms a listener on the grader's
+     * state events in the same script that starts the saves: it types once the
+     * next student's load has finished (ui.loading back to false). The step then
+     * waits for the typing and fails unless a grade save was still in flight at
+     * that moment. A scenario delays the save's response with "grade saves ...
+     * take N seconds to come back" to keep the window open.
+     *
+     * @When /^I enter "([^"]*)" as the overall grade, go to the next student, and type "([^"]*)" there before the save lands$/
+     * @param string $first Grade saved for the student on screen.
+     * @param string $second Grade typed for the next student.
+     */
+    public function i_enter_go_to_the_next_student_and_type_there(string $first, string $second): void {
+        $this->execute('behat_general::wait_until_exists', ['[data-action="grade-input"]', 'css_element']);
+        $a = json_encode($first);
+        $b = json_encode($second);
+        $this->execute_script(
+            "(function(){"
+            . "var input = document.querySelector('[data-action=\"grade-input\"]');"
+            . "var startid = parseInt(new URL(window.location.href).searchParams.get('userid'), 10);"
+            . "var loading = false;"
+            . "window.behatTypedOnNextStudent = null;"
+            . "function onchange(e) {"
+            . "var d = e.detail || {};"
+            . "var s = d.state;"
+            . "if (d.action !== 'readmode:on' || !s || !s.currentUser || s.currentUser.id === startid) { return; }"
+            . "if (s.ui.loading) { loading = true; return; }"
+            . "if (!loading) { return; }"
+            . "document.removeEventListener('local_unifiedgrader:statechanged', onchange);"
+            // Typed after the state publish this event belongs to has finished.
+            . "setTimeout(function() {"
+            . "var box = document.querySelector('[data-action=\"grade-input\"]');"
+            . "box.value = {$b};"
+            . "box.dispatchEvent(new Event('input', {bubbles: true}));"
+            . "window.behatTypedOnNextStudent = {userid: s.currentUser.id, duringsave: !!s.ui.gradesaving};"
+            . "}, 0);"
+            . "}"
+            . "document.addEventListener('local_unifiedgrader:statechanged', onchange);"
+            . "input.value = {$a};"
+            . "input.dispatchEvent(new Event('input', {bubbles: true}));"
+            . "input.dispatchEvent(new Event('focusout', {bubbles: true}));"
+            . "document.querySelector('[data-action=\"next-student\"]').click();"
+            . "})();"
+        );
+        $typed = $this->getSession()->wait(
+            self::get_extended_timeout() * 1000,
+            'window.behatTypedOnNextStudent !== null'
+        );
+        if (!$typed) {
+            throw new ExpectationException('The next student never finished loading.', $this->getSession());
+        }
+        if (!$this->evaluate_script('window.behatTypedOnNextStudent.duringsave')) {
+            throw new ExpectationException(
+                'The next student loaded after every grade save had landed, so the grade was not typed during one.'
+                    . ' Lengthen the save delay.',
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Assert the grade the grader keeps in its offline copy (IndexedDB) for a student.
+     *
+     * The copy is what the recovery banner offers after a crash or a closed tab,
+     * so a save that deletes it while the edit is still unsaved loses the edit.
+     * Retried until it matches: the panel writes the copy asynchronously.
+     *
+     * @Then /^the Unified Grader keeps an offline copy of the grade "([^"]*)" for "([^"]+)" on "([^"]+)"$/
+     * @param string $value Grade box value the copy must hold.
+     * @param string $student Student username.
+     * @param string $activity Assignment name.
+     */
+    public function the_unified_grader_keeps_an_offline_copy(string $value, string $student, string $activity): void {
+        $cmid = $this->assign_cmid($activity);
+        $userid = $this->user_id($student);
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $this->spin(
+            function () use ($cmid, $userid, $value) {
+                $this->execute_script(
+                    "(function(){window.behatOfflineCopy = undefined;"
+                    . "var cache = require('local_unifiedgrader/offline_cache');"
+                    . "cache.load({$cmid}, {$userid}, 'grade').then(function(r) {"
+                    . "window.behatOfflineCopy = r && r.data ? String(r.data.value)"
+                    . " : (cache.isAvailable() ? 'no copy' : 'no IndexedDB');"
+                    . "}).catch(function() { window.behatOfflineCopy = 'unreadable'; });"
+                    . "})();"
+                );
+                $this->getSession()->wait(2000, 'window.behatOfflineCopy !== undefined');
+                $copy = (string) $this->evaluate_script('window.behatOfflineCopy');
+                if ($copy !== $value) {
+                    throw new ExpectationException(
+                        "Expected the offline copy of the grade to hold '{$value}', found '{$copy}'",
+                        $this->getSession()
+                    );
+                }
+                return true;
+            },
+            [],
+            self::get_timeout()
+        );
+    }
+
+    /**
+     * Assert how many saves SaveQueue holds for a retry.
+     *
+     * @Then /^the Unified Grader holds (?P<count>\d+) saves? waiting for a retry$/
+     * @param string $count Expected queue length.
+     */
+    public function the_unified_grader_holds_saves_waiting(string $count): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $actual = (int) $this->evaluate_script("require('local_unifiedgrader/save_queue').getQueueLength()");
+        if ($actual !== (int) $count) {
+            throw new ExpectationException(
+                "Expected {$count} saves waiting for a retry, found {$actual}",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Assert that leaving the page now would raise the browser's leave-page warning.
+     *
+     * Dispatches a cancelable beforeunload event and reads whether a handler
+     * cancelled it, which is what makes the browser ask. A real navigation would
+     * open a native dialogue WebDriver cannot read. core/ajax treats any
+     * beforeunload as the page going away and stops reporting failed requests
+     * after it, so this belongs at the end of a scenario.
+     *
+     * @Then /^leaving the Unified Grader asks for confirmation$/
+     */
+    public function leaving_the_unified_grader_asks_for_confirmation(): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $prevented = (bool) $this->evaluate_script(
+            "(function(){var e = new Event('beforeunload', {cancelable: true});"
+            . "window.dispatchEvent(e); return e.defaultPrevented;})()"
+        );
+        if (!$prevented) {
+            throw new ExpectationException('Leaving the page would not warn about unsaved work.', $this->getSession());
+        }
+    }
+
+    /**
+     * Type a marking-guide score without leaving the guide, so nothing is saved.
+     *
+     * Dispatches the input event a keystroke fires, which marks the grade unsaved
+     * and writes the offline copy; no focus moves, so the guide's focus-out
+     * autosave never runs.
+     *
+     * @When /^I score "(?P<criterion>[^"]+)" "(?P<score>[^"]*)" without leaving the marking guide$/
+     * @param string $criterion Criterion shortname, as shown in its heading.
+     * @param string $score Score to type.
+     */
+    public function i_score_without_leaving_the_marking_guide(string $criterion, string $score): void {
+        $this->execute(
+            'behat_general::wait_until_exists',
+            ['input[data-criterionid]:not([data-levelid])', 'css_element'],
+        );
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $name = json_encode($criterion);
+        $value = json_encode($score);
+        $found = (bool) $this->evaluate_script(
+            "(function(){"
+            . "var input = Array.from(document.querySelectorAll('input[data-criterionid]:not([data-levelid])'))"
+            . ".find(function(el) {"
+            . "var row = el.closest('.border-bottom');"
+            . "var heading = row && row.querySelector('.fw-bold');"
+            . "return heading && heading.textContent.trim() === {$name};"
+            . "});"
+            . "if (!input) { return false; }"
+            . "input.value = {$value};"
+            . "input.dispatchEvent(new Event('input', {bubbles: true}));"
+            . "return true;"
+            . "})()"
+        );
+        if (!$found) {
+            throw new ExpectationException("No marking-guide criterion '{$criterion}' found", $this->getSession());
+        }
+    }
+
+    /**
+     * Reload the grader while it holds unsaved work, as a closed tab or a crash would leave it.
+     *
+     * Removes the panel's leave-page warning first: WebDriver cannot answer the
+     * native dialogue it raises. Nothing is saved; the offline copy stays.
+     *
+     * @When /^I reload the Unified Grader without saving$/
+     */
+    public function i_reload_the_unified_grader_without_saving(): void {
+        $this->execute_script("require('local_unifiedgrader/dirty_tracker').uninstall();");
+        $this->execute('behat_general::reload');
+    }
+
+    /**
+     * Wait for the banner offering the offline copy back, and restore it.
+     *
+     * The grader checks for an offline copy two seconds after it starts, so the
+     * banner is waited for rather than expected at once.
+     *
+     * @When /^I restore the unsaved changes the Unified Grader recovered$/
+     */
+    public function i_restore_the_recovered_unsaved_changes(): void {
+        $offered = $this->getSession()->wait(
+            self::get_extended_timeout() * 1000,
+            "!!document.querySelector('[data-region=\"recovery-banner\"] [data-action=\"restore-cache\"]')"
+        );
+        if (!$offered) {
+            throw new ExpectationException('The Unified Grader offered no unsaved changes to restore.', $this->getSession());
+        }
+        $this->find('css', '[data-region="recovery-banner"] [data-action="restore-cache"]')->click();
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+    }
+
+    /**
+     * Assert the score a marking-guide criterion's input holds.
+     *
+     * @Then /^the marking guide score for "(?P<criterion>[^"]+)" shows "(?P<expected>[^"]*)"$/
+     * @param string $criterion Criterion shortname, as shown in its heading.
+     * @param string $expected Value the input should hold.
+     */
+    public function the_marking_guide_score_shows(string $criterion, string $expected): void {
+        $this->execute('behat_general::wait_until_the_page_is_ready');
+        $actual = (string) $this->find('xpath', $this->guide_score_xpath($criterion))->getValue();
+        if ($actual !== $expected) {
+            throw new ExpectationException(
+                "Expected the '{$criterion}' score to show '{$expected}', found '{$actual}'",
+                $this->getSession()
+            );
+        }
+    }
+
+    /**
+     * Turn off an assignment rubric's "lockzeropoints" option.
+     *
+     * Core's rubric then grades from the minimum score: the lowest level on every
+     * criterion gives the minimum grade, where with the option on (core's default
+     * for new rubrics, and what the rubric generator leaves) the grade scales
+     * from zero points. Written into the definition's options as
+     * gradingform_rubric_controller::get_options() reads them back.
+     *
+     * @Given /^the rubric on "(?P<activity>[^"]+)" gives the minimum grade for its lowest levels$/
+     * @param string $activity Assignment name.
+     */
+    public function the_rubric_gives_the_minimum_grade_for_its_lowest_levels(string $activity): void {
+        global $DB;
+        $context = \context_module::instance($this->assign_cmid($activity));
+        $definition = $DB->get_record_sql(
+            "SELECT gd.id, gd.options
+               FROM {grading_definitions} gd
+               JOIN {grading_areas} ga ON ga.id = gd.areaid
+              WHERE ga.contextid = :contextid
+                    AND ga.component = :component
+                    AND ga.areaname = :areaname
+                    AND gd.method = :method",
+            [
+                'contextid' => $context->id,
+                'component' => 'mod_assign',
+                'areaname' => 'submissions',
+                'method' => 'rubric',
+            ],
+            MUST_EXIST,
+        );
+        $options = json_decode((string) $definition->options, true);
+        if (!is_array($options)) {
+            $options = [];
+        }
+        $options['lockzeropoints'] = 0;
+        $DB->set_field('grading_definitions', 'options', json_encode($options), ['id' => $definition->id]);
+    }
+
+    /**
+     * Give a student an assignment submission row that was never submitted.
+     *
+     * The row an accidental teacher interaction leaves behind, which the "--"
+     * reset reverts when the grader holds mod/assign:editothersubmission and keeps
+     * otherwise (see assign_adapter::reset_grade_and_submission()).
+     *
+     * @Given /^"(?P<student>[^"]+)" has an unsubmitted submission on "(?P<activity>[^"]+)"$/
+     * @param string $student Student username.
+     * @param string $activity Assignment name.
+     */
+    public function user_has_an_unsubmitted_submission_on(string $student, string $activity): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        [$course, $cm] = get_course_and_cm_from_cmid($this->assign_cmid($activity), 'assign');
+        $assign = new \assign(\context_module::instance($cm->id), $cm, $course);
+        $submission = $assign->get_user_submission($this->user_id($student), true);
+        if ($submission->status === ASSIGN_SUBMISSION_STATUS_SUBMITTED) {
+            throw new Exception("'{$student}' already has a submitted submission on '{$activity}'");
+        }
+    }
+
+    /**
+     * Assert that a warning notification on the page says the given text.
+     *
+     * Scoped to the warnings in core's notification region, the one
+     * core/notification addNotification() renders into, so a matching sentence
+     * elsewhere on the page does not count.
+     *
+     * @Then /^the Unified Grader warned "(?P<fragment>[^"]+)"$/
+     * @param string $fragment Text the warning must contain.
+     */
+    public function the_unified_grader_warned(string $fragment): void {
+        $this->spin(
+            function () use ($fragment) {
+                $text = (string) $this->evaluate_script(
+                    "Array.from(document.querySelectorAll('#user-notifications .alert-warning'))"
+                    . ".map(function(n) { return n.textContent; }).join(' | ')"
+                );
+                $text = trim(preg_replace('/\s+/', ' ', $text));
+                if (strpos($text, $fragment) === false) {
+                    throw new ExpectationException(
+                        "Expected a warning saying '{$fragment}', found '{$text}'",
+                        $this->getSession()
+                    );
+                }
+                return true;
+            },
+            [],
+            self::get_timeout()
+        );
+    }
+
+    /**
+     * Resolve a user id from a username.
+     *
+     * @param string $username Username.
+     * @return int User id.
+     */
+    private function user_id(string $username): int {
+        global $DB;
+        return (int) $DB->get_field('user', 'id', ['username' => $username], MUST_EXIST);
     }
 }

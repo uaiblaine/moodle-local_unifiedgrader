@@ -40,6 +40,38 @@ Feature: A save the server refuses is not shown as saved
       | overridden | overridden in the gradebook |
       | locked     | locked in the gradebook     |
 
+  Scenario: A refused clear keeps a manual override of the guide total locked
+    Given the following "users" exist:
+      | username | firstname | lastname | email                |
+      | student2 | Sam       | Pupil    | student2@example.com |
+    And the following "course enrolments" exist:
+      | user     | course | role    |
+      | student2 | TC101  | student |
+    And a marking guide is attached to "Essay 1" with criteria:
+      | shortname     | maxscore |
+      | Argumentation | 20       |
+    And "student1" has been graded with feedback "Seeded feedback" on "Essay 1"
+    And the gradebook grade for "student1" on "Essay 1" is overridden
+    # student1 is reached by navigation, the fresh render that loads a stored
+    # grade over the guide total. The first load of the student the grader opens
+    # on is not one: there the guide's computed total stays in the box.
+    When I am on the Unified Grader for activity "Essay 1" grading "student2"
+    And the marking panel has loaded
+    And I note the current Unified Grader student
+    And I press the right arrow key from the page body
+    Then the Unified Grader student should be changed
+    # Nothing is scored, so the stored 15 is a manual override of the guide's 0.
+    And the overall grade shows "15"
+    When I enter "-" as the overall grade and close the refusal
+    Then the overall grade shows "15"
+    # The clear unlocked the box before it was sent, and the refusal put the 15
+    # back. The total badge proves the score change below registered. Fails if the
+    # 15 came back without its lock: the change would replace it with the guide
+    # total, 8, which the autosave then stores over the override.
+    When I set the rubric score for "Argumentation" to "8"
+    Then the rubric total shows "8 / 20"
+    And the overall grade shows "15"
+
   Scenario: A grade typed while a refused clear is in flight is kept
     Given "student1" has been graded with feedback "Seeded feedback" on "Essay 1"
     And the gradebook grade for "student1" on "Essay 1" is overridden

@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.12.1+uai.4 (2026101202)
+
+- **Opening the grader directly on a student** shows the stored grade, not the total the rubric or marking guide
+  computes. A grade that overrides that total is shown as overridden and stays locked against criterion changes.
+  Before, the first student opened showed the computed total, unlocked, and saving from there could replace the
+  override with it. Reaching a student by navigation already worked.
+- **Behat coverage for the v2.12.1+uai.3 grader fixes** (`js_save_fixes.feature`, plus scenarios in
+  `refused_save.feature` and `grade_override.feature`):
+  - a save that lands after the switch to the next student;
+  - a correction made while a save is in flight, before switching student;
+  - a save that fails on the network, which stays unsaved until its retry;
+  - restoring the offline copy together with its marking-guide scores;
+  - a rubric without the zero-points lock;
+  - a full reset that has to keep the submission;
+  - a refused clear that keeps a manual override locked.
+
+  Each scenario fails with its fix reverted. The new steps simulate a slow or dropped save in the page, so no
+  production code serves the tests.
+
 ## v2.12.1+uai.3 (2026101201)
 
 Fixes for the findings of the v2.12.1+uai.1 comment audit and the security read of the upstream merge. Each was

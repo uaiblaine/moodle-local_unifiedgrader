@@ -18,8 +18,8 @@ Feature: Manual grade override locks against subsequent rubric edits
       | teacher1 | TC101  | editingteacher |
       | student1 | TC101  | student        |
     And the following "activities" exist:
-      | activity | name    | course | idnumber | grade |
-      | assign   | Essay 1 | TC101  | a1       | 20    |
+      | activity | name    | course | idnumber | grade | assignfeedback_comments_enabled |
+      | assign   | Essay 1 | TC101  | a1       | 20    | 1                               |
     And I log in as "teacher1"
 
   Scenario: A grade typed with no grading form survives a page reload
@@ -67,3 +67,36 @@ Feature: Manual grade override locks against subsequent rubric edits
     # And "Reset to rubric total" must put the rubric grade back, not that 0.
     When I click on "Reset to rubric total" "button"
     Then the overall grade shows "20"
+
+  Scenario: Opening the grader on a student whose grade overrides the marking-guide total shows it, locked
+    Given a marking guide is attached to "Essay 1" with criteria:
+      | shortname     | maxscore |
+      | Argumentation | 20       |
+    And "student1" has been graded with feedback "Seeded feedback" on "Essay 1"
+    # Opened directly, so the first load brings the student's grade and the guide.
+    When I am on the Unified Grader for activity "Essay 1"
+    And the marking panel has loaded
+    # Nothing is scored, so the stored 15 is an override of the guide's 0. Fails if
+    # the first load is not treated as a fresh render: the box keeps the guide
+    # total, 0, with no override badge and no lock.
+    Then the overall grade shows "15"
+    And I should see "Overridden"
+    When I set the rubric score for "Argumentation" to "8"
+    Then the rubric total shows "8 / 20"
+    And the overall grade shows "15"
+
+  Scenario: Opening the grader on a student whose grade overrides the rubric total shows it, locked
+    Given a rubric is attached to "Essay 1" with criteria:
+      | criterion | levels                         |
+      | Argument  | Weak:0, Sound:5, Compelling:10 |
+    And "student1" has been graded with feedback "Seeded feedback" on "Essay 1"
+    When I am on the Unified Grader for activity "Essay 1"
+    And the marking panel has loaded
+    # No level is picked, so the stored 15 is an override of the rubric's 0. Fails
+    # if the first load is not treated as a fresh render: the box keeps the rubric
+    # total, 0, with no override badge and no lock.
+    Then the overall grade shows "15"
+    And I should see "Overridden"
+    When I click on "Sound" "button"
+    Then the rubric total shows "5 pts"
+    And the overall grade shows "15"
