@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.12.1+uai.2 (2026101200)
+
+- **Moodle 5.3.** `$plugin->supported` now reaches 5.3, and CI runs the full PHP and database grid on
+  `MOODLE_503_STABLE` too. No code change was needed: every check and the PHPUnit suite pass on 5.3 as they do
+  on 5.0 to 5.2.
+
 ## v2.12.1+uai.1 (2026101100)
 
 Merge of the upstream v2.12.0 and v2.12.1 releases into this fork: BigBlueButton sessions scoped to the ones a

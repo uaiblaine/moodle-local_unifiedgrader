@@ -56,7 +56,7 @@ A comprehensive grading interface for Moodle 5.0+ that consolidates the marking 
 
 ## Requirements
 
-- Moodle 5.0 to 5.2
+- Moodle 5.0 to 5.3
 - PHP 8.2 or later
 
 ## Installation
