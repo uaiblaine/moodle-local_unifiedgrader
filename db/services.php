@@ -30,24 +30,28 @@ $functions = [
         'description' => 'Get activity metadata for the grading interface.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_get_participants' => [
         'classname' => 'local_unifiedgrader\external\get_participants',
         'description' => 'Get filtered and sorted participant list with submission status.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_get_submission_data' => [
         'classname' => 'local_unifiedgrader\external\get_submission_data',
         'description' => 'Get submission content for a specific student.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_get_grade_data' => [
         'classname' => 'local_unifiedgrader\external\get_grade_data',
         'description' => 'Get current grade and feedback for a student.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_grade' => [
         'classname' => 'local_unifiedgrader\external\save_grade',
@@ -60,6 +64,7 @@ $functions = [
         'description' => 'Get private teacher notes for a student.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_note' => [
         'classname' => 'local_unifiedgrader\external\save_note',
@@ -78,6 +83,7 @@ $functions = [
         'description' => 'Get comment library entries for the current teacher.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_library_comment' => [
         'classname' => 'local_unifiedgrader\external\save_library_comment',
@@ -96,6 +102,7 @@ $functions = [
         'description' => 'Get comment library tags for the current teacher.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_library_tag' => [
         'classname' => 'local_unifiedgrader\external\save_library_tag',
@@ -132,6 +139,7 @@ $functions = [
         'description' => 'Get instance-wide shared comments from other teachers.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_import_shared_comment' => [
         'classname' => 'local_unifiedgrader\external\import_shared_comment',
@@ -144,6 +152,7 @@ $functions = [
         'description' => 'Get annotations for a student submission file.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_annotations' => [
         'classname' => 'local_unifiedgrader\external\save_annotations',
@@ -162,6 +171,7 @@ $functions = [
         'description' => 'Get annotations for the current student\'s own submission file (read-only).',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_annotated_pdf' => [
         'classname' => 'local_unifiedgrader\external\save_annotated_pdf',
@@ -186,6 +196,7 @@ $functions = [
         'description' => 'Get submission comments for a student.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_add_submission_comment' => [
         'classname' => 'local_unifiedgrader\external\add_submission_comment',
@@ -246,6 +257,7 @@ $functions = [
         'description' => 'Get grade penalties for a student in an activity.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_penalty' => [
         'classname' => 'local_unifiedgrader\external\save_penalty',
@@ -276,6 +288,7 @@ $functions = [
         'description' => 'Get academic-integrity referrals for a student in an activity.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_refer' => [
         'classname' => 'local_unifiedgrader\external\refer',
@@ -289,6 +302,8 @@ $functions = [
         'type' => 'write',
         'ajax' => true,
     ],
+    // The one read left holding the session lock: it hands over to local_nida's grader API, whose
+    // session behaviour this plugin cannot vouch for. See tests/external/readonly_session_test.php.
     'local_unifiedgrader_get_submission_translation' => [
         'classname' => 'local_unifiedgrader\external\get_submission_translation',
         'description' => 'Get the English translation of a submission for a grader (via local_nida).',
@@ -318,6 +333,7 @@ $functions = [
         'description' => 'Get the segment-anchored comments for a student attempt.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_delete_segment_comment' => [
         'classname' => 'local_unifiedgrader\external\delete_segment_comment',
@@ -330,6 +346,7 @@ $functions = [
         'description' => 'Get the rating state of each of a student\'s forum posts.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_save_post_rating' => [
         'classname' => 'local_unifiedgrader\external\save_post_rating',
@@ -342,5 +359,6 @@ $functions = [
         'description' => 'Get the threaded discussion context around a student\'s forum posts.',
         'type' => 'read',
         'ajax' => true,
+        'readonlysession' => true,
     ],
 ];
