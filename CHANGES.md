@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.12.1+uai.5 (2026101203)
+
+- **The grader's reads no longer wait for the session lock.** Sixteen of the seventeen read web services
+  are declared `readonlysession`, so on a site with `$CFG->enable_read_only_sessions` on, the calls the
+  grader fires together when it opens a student run side by side instead of one after another. Measured
+  on Moodle 5.2 with the setting on: the six calls of opening a student (five reads and the feedback draft)
+  went from 3047/3113 ms to 751/774 ms, and the five reads fired together from 2806 ms to 575 ms. Nothing
+  changes while the setting is off, which is the default. The services already closed the session
+  themselves after their access checks; the declaration lets them skip the lock altogether.
+- `get_submission_translation` keeps the lock: it hands over to local_nida, whose session behaviour this
+  plugin cannot vouch for.
+- `tests/external/readonly_session_test.php` fails if a declared read changes `$SESSION`, or if the set of
+  declared reads drifts from the reads it exercises.
+
 ## v2.12.1+uai.4 (2026101202)
 
 - **Opening the grader directly on a student** shows the stored grade, not the total the rubric or marking guide
