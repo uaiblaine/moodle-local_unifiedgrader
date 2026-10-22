@@ -85,13 +85,18 @@ class hook_callbacks {
         }
 
         // For quiz, forum, and BBB activities, only act on the overview page — not subpages.
+        // Forums also act on the discussion page: a student may open a discussion without
+        // passing through the list of discussions, and would then never see the feedback
+        // banner. The other scripts find nothing to attach to there and do nothing.
         if ($modname === 'quiz' || $modname === 'forum' || $modname === 'bigbluebuttonbn') {
             try {
                 $pagepath = $PAGE->url->get_path();
             } catch (\Throwable $e) {
                 return;
             }
-            if (strpos($pagepath, '/mod/' . $modname . '/view.php') === false) {
+            $onoverview = strpos($pagepath, '/mod/' . $modname . '/view.php') !== false;
+            $ondiscussion = $modname === 'forum' && strpos($pagepath, '/mod/forum/discuss.php') !== false;
+            if (!$onoverview && !$ondiscussion) {
                 return;
             }
         }
@@ -191,12 +196,42 @@ class hook_callbacks {
             $definition = $adapter->get_grading_definition();
             if ($definition) {
                 $PAGE->requires->js_call_amd('local_unifiedgrader/assessment_criteria', 'init', [
-                    $definition,
+                    self::definition_for_students($definition, $context),
                     $feedbackurl->out(false),
                     get_string('assessment_criteria', 'local_unifiedgrader'),
                     false,
                 ]);
             }
         }
+    }
+
+    /**
+     * Make a grading definition safe and fit to show to students.
+     *
+     * The assessment criteria dialogue prints the rubric or marking guide
+     * descriptions as HTML, so each of them is cleaned here first; an adapter that
+     * passed some of it through raw would otherwise let whoever wrote the
+     * rubric run script in each student's browser. A marking guide's notes
+     * for markers are for markers, and are left out altogether.
+     *
+     * @param array $definition From base_adapter::get_grading_definition().
+     * @param \context $context The activity's context.
+     * @return array The definition to send to the student's browser.
+     */
+    public static function definition_for_students(array $definition, \context $context): array {
+        $clean = fn($text) => format_text((string) $text, FORMAT_HTML, ['context' => $context]);
+
+        $definition['description'] = $clean($definition['description'] ?? '');
+
+        foreach (($definition['criteria'] ?? []) as $i => $criterion) {
+            unset($criterion['descriptionmarkers']);
+            $criterion['description'] = $clean($criterion['description'] ?? '');
+            foreach (($criterion['levels'] ?? []) as $j => $level) {
+                $criterion['levels'][$j]['definition'] = $clean($level['definition'] ?? '');
+            }
+            $definition['criteria'][$i] = $criterion;
+        }
+
+        return $definition;
     }
 }

@@ -42,6 +42,9 @@ use mod_quiz\quiz_attempt;
 $cmid = required_param('cmid', PARAM_INT);
 $userid = required_param('userid', PARAM_INT);
 $attemptnum = optional_param('attempt', 0, PARAM_INT);
+// Leave the online text out when the grader already shows it inline beside
+// this page, so only the other plugins' content (a YouTube link, say) shows.
+$skiponlinetext = optional_param('skiponlinetext', false, PARAM_BOOL);
 
 // Load course module and validate access.
 [$course, $cm] = get_course_and_cm_from_cmid($cmid);
@@ -57,6 +60,18 @@ if (!$cangrade && !$canviewfeedback) {
 if (!$cangrade && (int) $userid !== (int) $USER->id) {
     throw new moodle_exception('nopermissions', '', '', get_string('viewfeedback', 'local_unifiedgrader'));
 }
+if (!get_config('local_unifiedgrader', 'enable_' . $cm->modname)) {
+    throw new moodle_exception('invalidactivitytype', 'local_unifiedgrader');
+}
+if ($cangrade) {
+    // A teacher may only preview students they can see in this activity.
+    \local_unifiedgrader\access::require_student_access($context, $userid);
+} else if (!adapter_factory::create($cmid)->is_grade_released((int) $USER->id)) {
+    // This page is the student's feedback view of their own work. Before the
+    // grade is released it must show nothing: for a quiz it would otherwise
+    // reveal marks and which answers were right while the quiz hides them.
+    throw new moodle_exception('feedback_not_available', 'local_unifiedgrader');
+}
 
 // Set up a minimal embedded page (no navigation chrome).
 $PAGE->set_url(new moodle_url('/local/unifiedgrader/preview_submission.php', [
@@ -65,6 +80,11 @@ $PAGE->set_url(new moodle_url('/local/unifiedgrader/preview_submission.php', [
 ]));
 $PAGE->set_context($context);
 $PAGE->set_pagelayout('embedded');
+// Moodle 5.3 adds a "Previous / Next activity" footer to activity pages, which
+// makes no sense inside the grader or its modals.
+if (method_exists($PAGE, 'set_show_navigation_footer')) {
+    $PAGE->set_show_navigation_footer(false);
+}
 
 // Buffer the body content so adapters / submission plugins can register head requirements
 // (Atto / TinyMCE editor head_setup, AMD modules, CSS) before $OUTPUT->header() is emitted.
@@ -80,6 +100,9 @@ if ($cm->modname === 'assign') {
     if ($submission) {
         foreach ($assign->get_submission_plugins() as $plugin) {
             if ($plugin->is_enabled() && $plugin->is_visible()) {
+                if ($skiponlinetext && $plugin->get_type() === 'onlinetext') {
+                    continue;
+                }
                 $pluginhtml = $plugin->view($submission);
                 if (!empty(trim($pluginhtml))) {
                     echo '<div class="submission-plugin mb-3">' . $pluginhtml . '</div>';
@@ -115,12 +138,16 @@ if ($cm->modname === 'assign') {
     if ($attempt) {
         $attemptobj = quiz_attempt::create($attempt->id);
 
-        // Configure display options for a read-only review.
+        // Configure display options for a read-only review. A teacher sees
+        // everything. A student sees what the quiz's own review options allow
+        // them at this point, and nothing more.
         $options = $attemptobj->get_display_options(true);
-        $options->marks = \question_display_options::MARK_AND_MAX;
-        $options->correctness = \question_display_options::VISIBLE;
-        $options->feedback = \question_display_options::VISIBLE;
-        $options->manualcomment = \question_display_options::VISIBLE;
+        if ($cangrade) {
+            $options->marks = \question_display_options::MARK_AND_MAX;
+            $options->correctness = \question_display_options::VISIBLE;
+            $options->feedback = \question_display_options::VISIBLE;
+            $options->manualcomment = \question_display_options::VISIBLE;
+        }
         $options->history = \question_display_options::HIDDEN;
         $options->flags = \question_display_options::HIDDEN;
         $options->generalfeedback = \question_display_options::HIDDEN;

@@ -1,5 +1,250 @@
 # Changelog
 
+## v3.0.1+uai.1 (2026102200)
+
+Upstream 3.0.1 merged into the fork (upstream 2.12.2 to 3.0.1: late penalties owned by Unified Grader on
+Moodle 5.3, the Dates & extensions dialogue, posting a grade for one student, a group or the class, Friction
+Feedback, proctoring review priority, the rewritten help, and the assignment comment sync). The fork's own
+fixes from 2.8.5 to 2.12.1+uai.5 are kept: upstream superseded only the hidden-grade release check, where its
+`withheld_blocks_release()` now decides for assignments, forums and BigBlueButton.
+
+- **Moodle 5.3 only.** `$plugin->supported = [503, 503]` and `requires` 5.3. Sites on Moodle 5.0 to 5.2 stay on
+  the `MOODLE_502_STABLE` branch (2.12.1+uai.5). CI runs the 5.3 legs only.
+- **Upgrading from a 2.12.1+uai release** creates the three tables upstream added in steps 2026100100 and
+  2026100200 (`local_unifiedgrader_penset`, `_friction`, `_frictioncfg`). Those step numbers sit below the fork's
+  2026101203, so a fork site skipped them; the new step 2026102200 creates whichever is missing.
+- **Comment library tools stay reachable for managers.** Upstream's new settings index moved the moderation
+  and system-defaults pages back inside `$hassiteconfig`; they are registered outside it again, and the
+  plugin's category stays visible to users without `moodle/site:config` so a manager can find them.
+- **Exported comment libraries keep the fork's hardening**: byte order mark, `send_file()`, formula-cell
+  escaping and the owner check, now beside upstream's library access check.
+- **A restored offline copy reaches the quiz comment editors.** Upstream's rich-text editor for quiz question
+  comments is what the save reads, so a comment restored from the offline cache is written into the editor
+  as well as its textarea.
+- The three new read services (`get_student_dates`, `preview_student_dates`, `get_proctoring`) are declared
+  `readonlysession`, like every other read but the translation; `get_activity_info`, removed upstream, left
+  the list.
+- Lang packs re-sorted and three keys the merge duplicated removed; the Behat context keeps every step of
+  both sides and gets upstream's `unescape_argument()` back for its new steps.
+
+## v3.0.1 (2026101601)
+
+### Fixed: assignment comments made outside Unified Grader (issue #24)
+
+- Assignment comments posted in core's submissions list or grader now appear in Unified Grader and send its notifications, and Unified Grader's comments now appear in core. Deleting one deletes both.
+- The upgrade links existing comments and copies the missing ones both ways, without notifying.
+
+### Fixed: a YouTube link hidden behind online text
+
+- When an assignment had online text and another submission type such as a YouTube link, the grader showed only the text. Each now has its own pill, and the two can be shown side by side in the split view.
+
+## v3.0.0 (2026101600)
+
+### Requirements
+
+- **Moodle 5.1 or later** (`requires` 2025100600); Moodle 5.0 is no longer supported, and sites on it stay on release 2.13. Moodle 5.3 is the release this one is developed, tested and documented on. On 5.1 and 5.2, which have no core quiz due date, late penalties and quiz due dates behave as they did in 2.13.
+- CI tests Moodle 5.3 (PostgreSQL on PHP 8.3 and 8.4, MariaDB on PHP 8.3), 5.2 (MariaDB, PHP 8.3) and 5.1 (PostgreSQL, PHP 8.2), on the `MOODLE_50x_STABLE` branches now that 5.3 has one.
+- **PHP 8.4:** the comment library's CSV export and import pass the escape character explicitly, which PHP 8.4 deprecates leaving out. Files exported earlier read back the same.
+
+### Penalties explained on the student's feedback
+
+A student's feedback page and feedback PDF showed the mark as the marker typed it, with each penalty as a bare "-10% Late" chip beside it. Nothing said what the chips were taken from or what was left, and the figure on the page did not match the gradebook.
+
+- **Feedback page:** a Penalties card sits under the overall feedback, on assignments, forums, quizzes and BigBlueButton. It lists the mark awarded, each penalty with its reason and the marks it cost, and the final grade, with a note that penalties are percentages of the maximum grade. The chips are replaced by one "Penalties: -30%" label that jumps to the card.
+- **Headline grade:** with penalties, the grade at the top of the page is now the final grade, the one in the gradebook.
+- **Feedback PDF:** the grade ring and the fraction under it show the final grade, and the same breakdown is listed beneath them in place of the row of chips. Each penalty is drawn on the ring as its own segment, carrying on from where the final grade stops, in a muted colour and a narrower band so it cannot be read as marks that count. The list is the ring's legend: every row opens with the colour of its segment, and "Mark awarded" and "Final grade" are in bold.
+- **Reasons:** a late penalty reads "Late submission" with how late beneath it; a word count penalty reads "Word count"; a marker's own penalty shows the label they typed, such as "Plagiarism".
+- **Edge cases:** the final grade does not go below zero, and the total shows what was actually deducted. A scale grade lists the penalties without the arithmetic. During a Friction Feedback walk the card stays hidden with the mark.
+- **The PDF button is on every feedback page.** A quiz showed "Download feedback PDF" only when the marker had written overall feedback, so a quiz marked question by question had no PDF at all; an assignment showed it only with a grade. Assignments, forums, quizzes and BigBlueButton now all show it whenever the feedback is released.
+- The arithmetic is in one place, `feedback_data_helper::penalty_breakdown()`, used by the page and the PDF. Seven new strings, in all 13 language packs.
+
+### Forum extensions past the cut-off date
+
+A forum's cut-off date applies to everyone, and Moodle has no per-student override for it, so an extension past the cut-off only moved the date a late penalty was counted from; the student still could not post.
+
+- **The student can post until their extension ends.** Moodle has a capability for posting after a forum's cut-off (`mod/forum:canoverridecutoff`), held by teachers. Unified Grader now creates a role holding only that, *Forum extension (Unified Grader)*, and gives it to the student in that one forum when their extension runs past the cut-off. Nobody else is affected.
+- **It ends with the extension.** A new scheduled task, `expire_forum_extensions`, runs every 15 minutes and takes the role away once the extension is over. Removing the extension, or bringing it back before the cut-off, takes it away at once. If a teacher moves the cut-off earlier than an extension already granted, the task gives the student the role.
+- **Made in the plugin's name.** The role cannot be assigned by hand, and the assignments are marked as Unified Grader's, so they are never confused with roles a person gave. The upgrade creates the role and gives it to any student whose existing extension already passes the cut-off.
+- **Rated forums get Dates & extensions back.** It was hidden on forums graded by post ratings because they take no late penalty. It now appears there too, for the cut-off, and the dialogue no longer predicts a late penalty for them.
+- The cut-off row and status line in the dialogue now say the student can post until their extension ends, in all 13 language packs.
+
+### Penalties on forums graded by post ratings
+
+Penalties were switched off for every forum graded by rating its posts, because Moodle works the grade out from the ratings and rewrites it each time one changes. They now apply to the rated forums where a penalty means something. Moodle 5.3 only.
+
+- **Which forums.** The ratings must be points (not a scale such as stars or words), and the aggregate type must be average or sum. A count only tallies participation, and with maximum or minimum a single post decides the grade, so those take no penalty and the Penalties button stays hidden. The rule is `forum_rating_helper::penalties_apply()`, and the grader gets the answer as `ratingpenaltieseligible` in the activity info.
+- **Same arithmetic as everywhere.** Lateness is measured from the student's first post against their due date or extension. Late, word count and other penalties are percentages of the points maximum, summed, and taken off the combined rating, never below zero. The marking panel shows the badges and the final grade beside the Post ratings card.
+- **Kept in the gradebook.** The combined rating stays as Moodle computed it and the deduction is recorded beside it. Moodle clears that deduction every time a post is rated or re-rated, so it is put back after each rating change. The mark awarded shown to the teacher and the student is the combined rating; the final grade matches the gradebook.
+- **Settings changes.** Changing the aggregate type or the scale so a forum no longer qualifies removes its deductions, and its late and other penalty rows stop being shown. Changing it back applies them again. The Dates & extensions dialogue previews the late penalty on a qualifying forum, and on one that does not, says why there is none.
+- **Opt-in.** A rated forum takes late penalties only once a teacher ticks *Apply late penalties* in its settings; it is off by default, so courses already running and past courses gain no penalties they never had. Forums graded as a whole keep it on by default, as before. One new string, in all 13 language packs; the help explains which forums qualify.
+
+### The marker's marks on the pages of the feedback PDF
+
+On the web a student sees their document with the marker's marks on it: highlights, ticks, crosses, queries, strike-outs, and comments as numbered pins beside the text. None of that reached the feedback PDF, which carried the summary and the bare document.
+
+- **On the pages:** every text-anchored mark is now drawn on the submission's pages in the PDF, on the words it was put on, in the same colours as the web view. A comment is a numbered pin at the start of its phrase.
+- **Comment cards beside the page:** as on the web, each page has a margin on its right, and every comment is set there as a card with its number, the marker's name and what they wrote, joined to its pin by a dotted line. A card starts level with its pin; where pins are close the cards stack, and a crowded page gets smaller type so all of them fit. The marker's name is left off where the assignment hides marker identities.
+- **In the summary:** only a comment that could not be shown beside its words is listed there, under "Comments on your submission", with its number, page and the phrase it is about: a comment on online text, or on a site that cannot draw on the pages. The overall feedback and the rubric or marking guide are as before.
+- **How a mark finds its place:** a mark is stored against a phrase of the document's text, not a position. Ghostscript reports where every character sits, the phrase is found in that (the occurrence nearest where the marker put it, when it occurs more than once), and the mark is drawn there with the page importer Moodle's own PDF annotator uses (`pdf\submission_marks_pdf`, `pdf\page_importer`).
+- **Checked against the browser:** on a five-page test document (two columns of small type, a landscape page, US Letter stored rotated, A5, ligatures, accents, a phrase repeated on one page) and a Word submission, all twenty marks land within 2.1 points (0.7 mm) of where the browser's viewer lays the same phrase out.
+- **Two things that would have broken it:** a page stored rotated cannot be measured letter by letter, so the pages are measured on the same plain copy the marks are drawn on; and rewriting a PDF can lose the text behind a ligature ("tt", "Th"), so the original's text is used wherever the copy lost any.
+- **Best effort:** this needs Ghostscript (the path Moodle already uses for Annotate PDF). Without it the document is left as it was, and the comments are listed in the summary instead. Word submissions use the PDF Moodle converted them to.
+
+### One feedback PDF for every activity
+
+- **Course name in the header:** a new setting on the Grading page, "Course name in the header" (`feedbackpdf_coursename`), chooses between the course full name (the default) and the short name.
+- **Generated date:** the footer of every page now reads "Generated by Unified Grader on" followed by the date and time, beside the date the work was graded. A saved PDF can outlive a change to the grade, and this says when the copy was made.
+- **Same button everywhere:** see the PDF button note under the penalties entry above. Assignments, forums, quizzes and BigBlueButton share one generator, header, score ring and footer; only the pages that follow differ (the annotated submission, the posts, the attempt, or the session figures).
+
+### Documentation
+
+The built-in help page (`help.php`) is rewritten for 3.0.0 on Moodle 5.3.
+
+- **Four parts:** teachers and markers, students, administrators, and developers, with a section navigation that marks where you are, and a start area that routes each reader.
+- **Screenshots:** 51 real screenshots in `pix/help` (about 3 MB), each with alt text and a caption, opening enlarged on click. The empty screenshot placeholders are gone.
+- **3.0 features documented:** posting grades, Friction Feedback, late penalties, Dates & extensions, academic integrity referral, proctoring review priority and the settings index. Every setting and capability is listed with its key, default and meaning.
+- **Corrections:** the annotation tool list, the entry points, the status menu, blind marking (supported), and the `viewall` capability (it does not open the grader). `quizaccess_duedate` is described as legacy.
+- **Troubleshooting** is a list of collapsible entries, including "Conversion fails although the conversion server is up" (the converter's port must be in Moodle's allowed ports).
+- Existing anchors are kept, so the grader's help button and older links still land.
+- The description of "Render online text as PDF" no longer names converter products, in all 13 language packs.
+- `README.md` brought up to 3.0.
+
+### Proctoring review priority on quizzes
+
+On a proctored quiz, each student in the list carries a red, yellow or green marker for their review priority, and the marking panel has a Proctoring card with the findings behind it and a link to the evidence. Four services are supported, each behind a provider class (`proctoring\provider\*`), so the marker, the card, the web service and the capability are the same for all.
+
+Every service is off by default. An administrator ticks the ones the institution uses under "Proctoring services to show"; a service that is not ticked is never contacted and nothing about it is shown. Only users with the new `local/unifiedgrader:viewproctoring` capability (editing teachers and managers by default) see any of it.
+
+| Service | Read from | The colour is |
+|---|---|---|
+| Quilgo (`quizaccess_quilgo`) | The plugin's report table; reports it has not stored yet are fetched through its own API client | Quilgo's own confidence level: high is green, moderate yellow, low red |
+| ProctorLink (`quizaccess_quizproctoring`) | The plugin's tables | Ours, from the kind of warning |
+| AutoProctor (`quizaccess_autoproctor`) | AutoProctor's REST API, with the credentials its plugin holds | Ours, from its trust score against two site thresholds (80% and 50% by default) |
+| SMOWL (`block_smowl`) | SMOWL's Results API, with the entity name and key saved in the SMOWL block | Ours, from the kind of alarm |
+
+- **Which service proctors a quiz is detected.** The three access rule plugins each record that they are on for a quiz, so there is nothing to set per quiz. For SMOWL two things must hold: the course has the SMOWL block (`block_smowl`), and the quiz is switched on in the SMOWL panel, which SMOWL's API is asked about. A course without the block is never asked about. In a course with it, a quiz that is not switched on shows "SMOWL is not active on this quiz", since a teacher cannot otherwise tell without opening the panel.
+- **"Ours, from the kind"** (`proctoring\rule`): any finding in a high-priority category is red, any other is yellow, none is green. It follows the kind of finding, not the number. The categories are site settings per service, and the colours can differ from what the service's own report suggests.
+- **Per attempt where the service is.** Quilgo, ProctorLink and AutoProctor keep a result per attempt: the card follows the attempt selector, and the student's marker is their worst attempt. SMOWL keeps one result per student per quiz.
+- **Still under review.** Green is only ever a finished verdict. While any evidence is waiting on the service (SMOWL camera validation, a Quilgo or AutoProctor report not ready), a student with nothing against them shows as "Awaiting review", never as low priority. An alarm already reported counts at once: the marker is red or yellow straight away, hollow to show that more may follow.
+- **Links.** The marker and the card open the service's own report in a new tab: the student's attempts in ProctorLink, the attempt in AutoProctor, the quiz's report list in Quilgo, the SMOWL block's panel for the course. A link shows only to a user who holds that plugin's own report capability.
+- **Cost.** Answers from SMOWL, AutoProctor and Quilgo's API are kept for fifteen minutes (`proctoring` cache); the card's refresh button asks again. ProctorLink is read from its tables each time. The grader draws first and asks afterwards, so an unreachable service does not hold up marking.
+- **Other plugins' data is only read.** A provider checks that the plugin and its tables exist before reading, and never writes to them.
+
+Covered by `tests/proctoring/`. The access rule plugins are not installed on a test site, so their tables are stood in for and their APIs faked: none of the four has yet been checked against the live service. Checked against the live services so far: SMOWL's authentication, request format and "quiz not switched on" answer, and AutoProctor's authentication, request format and "unknown attempt" answer. Also seen with real data: Quilgo reports and its top-up call, an AutoProctor trust score, ProctorLink warnings, and a SMOWL result filed under the quiz ID and the Moodle user ID. Still to see: a SMOWL result after SmowlTech has finished validating it.
+
+### Settings grouped into pages
+
+The single settings page had grown long. "Unified Grader" under Local plugins now opens an index of tiles, one per group of settings: General (which activities open in the grader), Grading (display and marking options, posting quiz grades, late penalties), Comment library (its settings, with buttons to the two library tools), Friction feedback, and Academic integrity (plagiarism scanning, the impropriety report form, proctoring).
+
+- Each page keeps its own address, and General keeps the one the single page had. No setting was renamed, so saved values carry over.
+- The pages sit in a hidden admin category, so Moodle no longer renders them all on one category page. Every page links back to the index.
+- Academic integrity opens with a note on plagiarism scanning: whether plagiarism plugins are enabled on the site, and where Moodle configures them. The Unified Grader has no plagiarism settings of its own.
+- A proctoring service's own settings appear only once it is ticked and saved.
+
+### Translations
+
+All twelve language packs (Afrikaans, German, Greek, Spanish, French, Hebrew, Italian, Portuguese, Russian, Swahili, Xhosa and Zulu) are back at parity with English: 218 strings added to each, covering everything new in 3.0.0. Placeholders and embedded links were checked against English in every pack. Product names (Quilgo, ProctorLink, AutoProctor, SMOWL, Friction Feedback, Unified Grader) are left in English.
+
+### Post grades for one student, a group, or the class
+
+Grade posting is no longer only a switch for the whole class. The post-grades menu now posts or hides the open student, the groups in the current filter, or the whole class. A partly posted class shows how many students are posted, and each row carries an eye for that student's grade.
+
+The class switch is still the grade item's hidden flag. A student or a group is that student's gradebook cell (`grade_grades.hidden`). While the item is hidden it covers every cell, so posting some of the class copies the item's hidden value onto every other student's cell, creating one where none exists, and only then reveals the item. A grade saved afterwards for a student who was not posted is hidden too. Posting the whole class clears every cell.
+
+"Group" is a course group, the same groups the grader already filters by. A separate-groups teacher posts their own groups, and cannot post the class.
+
+Assignments with marking workflow release the same students. A mark saved afterwards is written even when Moodle 5.3 has locked a released grade, and the workflow state is left as it was. When a partial post reveals the item, students who stay hidden are marked mailed, so the assignment's notification cron (which watches the item, not the cell) does not write to them.
+
+Quizzes are unchanged on the attempt review page. Posting one student or one group writes the gradebook cell and Unified Grader feedback only, and leaves the quiz review options alone. While those options still hide marks, the gradebook hides the mark as well, and the gradebook eye cannot show the quiz item because the quiz owns that flag. With Friction Feedback, finishing the walk shows that student's mark in the gradebook and keeps their feedback page open. The review options stay as they are, other students stay hidden, and a later quiz grade sync does not hide the mark again. Hiding the class closes it. The admin setting `enable_quiz_post_grades` still gates every quiz post.
+
+Covered by `tests/grades/release_test.php` and `tests/behat/post_grades.feature`.
+
+### Friction feedback
+
+Posting a grade can hold the mark back until the student has read the feedback. The site setting is off. An activity can follow that, or force the walk on or off. The post itself does not grow a new choice.
+
+The student is told the feedback is ready. On the feedback page a single step shows one rubric criterion, one marking-guide criterion, one manually marked quiz question, or the overall feedback. Points stay off the card. A timer (20 seconds by default) runs and pauses while the tab is hidden. When it finishes, the student ticks "I have seen this". The last tick reveals the mark, the points, and the feedback PDF on the normal page. On a quiz that page stays open even while the attempt review options still hide marks. Closing the page resumes on the same step. A new mark starts the walk again.
+
+The gradebook mark stays hidden for that student until then. On a quiz, that includes the grade item the review options keep hidden. The teacher still sees the grade as posted. The stored course total includes the hidden grade. Moodle's user report drops hidden items from the total a student sees, so a daily task opens a held cell when either clock is due, whichever comes first: a set number of days before the course end (14 by default), or a set number of days after the mark was posted (21 by default). The second clock also covers a course with no end date. A grade posted after its clock has already passed opens on the next run. A mark a teacher hides is left hidden. The assignment release email stays unsent for the whole hold, including the fail-safe, so the mark is not mailed days later.
+
+The quiz attempt review page is unchanged, and forum rating stars stay visible. A course backup does not carry an in-progress walk.
+
+Covered by `tests/friction/service_test.php` and `tests/behat/friction_feedback.feature`.
+
+### Unified Grader owns late penalties on Moodle 5.3
+
+Moodle 5.3 gives quizzes their own due date and due date overrides (MDL-82521), and records a gradebook deduction separately from the raw grade (MDL-88407). On 5.3 and later, Unified Grader now applies late penalties itself for assignments, forums and quizzes, from the core `gradepenalty_duedate` rules, so all three behave the same way. Moodle 5.0 keeps the behaviour of 2.13 unchanged. The switch is made at runtime (`penalty\compat::unified()`, true once `mod_quiz` is at 2026083100 or later), so one release serves both.
+
+- **One switch per activity.** An "Apply late penalties" box in the assignment, forum and quiz settings, stored in the new `local_unifiedgrader_penset` table and carried through backup and restore. Until it is saved, an activity keeps the behaviour it had: assignments follow their own "Apply penalties" setting, forums are on, and quizzes are on only if `quizaccess_duedate` penalised them. New activities start off.
+- **Quiz due dates and extensions come from core.** The quiz due date is `quiz.duedate`, and an extension is the `duedate` on the student's core override, saved through the quiz's override manager with the close time raised to match. `quizaccess_duedate` is ignored on 5.3 even if still installed, since its `duedate` form field and settings query collide with core's. A quiz without a due date is never late; the close time is no longer used in its place.
+- **Quizzes: the first genuine attempt decides.** Only the first submitted attempt in which the student answered at least `quizgenuineattemptpct` of the scoring questions (new setting, default 50%) counts. On time, and later attempts can reach full marks. Late, and its penalty comes off the quiz grade whatever later attempts score. An attempt submitted empty no longer secures an on-time attempt.
+- **Deductions go to `grade_grades.deductedmark`** (`penalty\gradebook_writer`). The raw grade stays the mark as given, the gradebook shows its penalty icon, and nothing is pinned with an override, so quiz regrades and new attempts flow through. Teacher overrides and locked cells are left alone. A cell pinned by the old quiz penalty path is released the next time that student's grade is resynced, so grades in closed courses are not recalculated. Such a pin is recognised by its "Late penalty of N% applied." feedback, which survives a course backup and restore that rewrites the grade history, or by the history entry that set the override. That auto-written feedback is cleared with the pin. Courses still frozen on the pre-5.3 penalty maths fall back to the old reduced push.
+- **Penalties survive grading outside the grader.** New observers resync penalties (`penalty\service::resync()`) on `user_graded`, quiz attempt submission, assignment extensions, and assignment and quiz user and group overrides. Changes to an activity's settings resync the whole activity in an adhoc task (`task\resync_penalties`). Before this, a mark saved on Moodle's own assignment grading page discarded Unified Grader's manual penalties from the gradebook.
+- **Assignments no longer rely on core's late penalty.** While an administrator leaves Assignment on under Grade penalties: supported modules, Unified Grader leaves the late penalty to core for assignments with "Apply penalties" ticked, and the plugin settings page asks for it to be switched off. Core's assignment pages show the penalised grade and penalty icon from the gradebook. `assign_grades.penalty` is left to core, which resets it on every grade push, so previous attempts listed there show their unpenalised marks.
+- **Late penalty is a penalty row everywhere.** The grader shows it read-only, like forum late penalties, and it changes only when an extension, override or due date changes. The client no longer reads a separate late figure or old "Late penalty of N% applied" feedback text on 5.3 (new `latepenaltyisrow` activity flag).
+- **Migration.** The hourly `task\migrate_penalties` (or `cli/migrate_penalties.php`) saves the late penalty switch `quizaccess_duedate` held for each quiz. It runs once, on 5.3. Run it before uninstalling the access rule. Moving the rule's due dates and extensions into core is left to the rule's own final release.
+
+Covered by `tests/penalty/unified_penalties_test.php` and `tests/behat/late_penalties.feature` (both skipped below 5.3).
+
+### The Dates & extensions dialogue
+
+"Overrides and extensions" is now "Dates & extensions", a native dialogue in place of the iframe of Moodle forms. It works for assignments, quizzes and forums, on Moodle 5.0 and 5.3.
+
+- **Every setting on one screen.** A table lists each date setting with the class default beside this student's value. There are no collapsed sections, and the class defaults are always in view. A changed value is highlighted, with the default struck through beside it.
+- **Overrides are made in their row.** "Change" opens an input in place, "Reset" puts the class default back, and "Remove all overrides" clears everything. Nothing is saved until Save.
+- **Extensions in one click.** Preset buttons (+1 day, +2 days, +3 days, +1 week by default) and a date picker. The presets come from a new site setting, `extensionpresets`: day counts, with multiples of 7 shown as weeks. A close or cut-off date that an extension passes moves with it, and its row says so.
+- **Penalty preview before saving.** A banner states what the chosen dates mean: submitted on time, late with the penalty it carries, or "On time with this extension". On Moodle 5.3 it gives the late penalty for every activity type. On 5.0 it gives it for forums, and states lateness for assignments and quizzes, whose penalties core and `quizaccess_duedate` still own there.
+- **Save stays in view.** The footer, with Save, a count of changes and "Remove all overrides", no longer scrolls away when a section or notice grows.
+
+Behind it, `dates\student_dates` loads, previews and saves through the same activity APIs as before, via three new web services (`get_student_dates`, `preview_student_dates`, `save_student_dates`). Dates cross the web service boundary as local date-times in the teacher's Moodle time zone. Extending an assignment still offers the penalty recalculation wherever core owns its penalty. Adapters gained `get_late_reference_time()` and an optional due date on `calculate_late_penalty()` for the preview.
+
+Removed: `overrides_extensions.php`, `override.php`, `extension.php`, `quiz_extension.php`, `forum_extension.php`, their forms, and the unused `override_modal` and `extension_modal` modules.
+
+Covered by `tests/dates/student_dates_test.php` and `tests/behat/dates_dialogue.feature`.
+
+### Caching
+
+The plugin now uses the Moodle Universal Cache for three small lookups that are read far more often than they change (`db/caches.php`). Each is cleared wherever its answer can change.
+
+- **`penaltyswitch`:** whether late penalties apply to an activity (`penalty\activity_settings::is_enabled()`). On Moodle 5.3 every penalty resync asks this, so a regrade or a changed due date asked it once per student. Cleared when the switch is saved or deleted, and when the activity's settings are saved, since the default comes from them.
+- **`newsforum`:** whether a forum is a news forum, asked on every forum page a student opens. Cleared when the forum's settings are saved.
+- **`userprefs`:** a teacher's grader preferences, read each time the grader opens. Kept in step on every write, and cleared when the privacy API deletes them.
+
+Grades, submission status and whether feedback is released are still read from the database every time. Covered by `tests/cache_test.php`.
+
+### Fewer queries as classes grow
+
+The participant list, which the grader fetches on opening and again after every saved grade, cost one or more queries per student. It now costs the same for 15 students as for 3, for every activity type.
+
+- **Profile pictures.** Building each student's picture URL looked up their user context one at a time. All four adapters now fetch them in one query (`base_adapter::attach_user_contextids()`); the forum thread view and the submission comment thread do the same for their authors.
+- **Quiz due dates.** Each student's effective due date was worked out separately, which with `quizaccess_duedate` on Moodle 5.0 meant several queries per student. `quiz_adapter::get_effective_duedates()` resolves user overrides, group overrides and the quiz's own date for the whole class at once.
+- **Team submissions.** Assignments with team submissions fell back to core's per-student calls, about five queries each. They are now batched like individual submissions, and listing the class no longer creates empty submission rows as those calls did.
+- **Blind marking.** The anonymous IDs are read in one query.
+- **Forum attachments.** A student's attachments were read post by post, twice. `base_adapter::get_area_files_by_item()` reads them in one query.
+- **Also batched:** the grades behind an assignment's attempt list, and the tags of pending comment library proposals.
+- **Penalty resync.** `task\resync_penalties` builds one adapter for the activity, not one per student.
+
+`tests/query_count_test.php` fails if a per-student query returns to any participant list, and checks each batched lookup against the single one it replaced.
+
+## v2.13.0 (2026093000)
+- Replace the plain textarea for comments on manually marked quiz questions with the TinyMCE editor, including images and recorded audio
+- Show images and audio from question comments in the attempt preview
+- Convert line breaks in comments saved from the old textarea so they display
+- Keep the plain textarea for teachers whose preferred editor is not TinyMCE
+
+## v2.12.5 (2026092802)
+- Fix re-edited overall feedback sometimes staying open after a save
+
+## v2.12.4 (2026092801)
+- Show the forum feedback banner inside a discussion as well as on the forum's list of discussions
+
+## v2.12.3 (2026092800)
+- Fix the quiz feedback page crashing for every student
+
+## v2.12.2 (2026092301)
+- Fix a quiz due date extension vanishing from the student's calendar when a core override is saved or deleted (needs `quizaccess_duedate` v2.0)
+- Fix an error when removing a student's quiz override, or clearing all their overrides
+
 ## v2.12.1+uai.5 (2026101203)
 
 - **The grader's reads no longer wait for the session lock.** Sixteen of the seventeen read web services

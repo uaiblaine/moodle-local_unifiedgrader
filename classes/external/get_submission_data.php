@@ -70,6 +70,7 @@ class get_submission_data extends external_api {
         $context = \context_module::instance($params['cmid']);
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
+        \local_unifiedgrader\access::require_student_access($context, (int) $params['userid']);
 
         // Release the PHP session lock so concurrent AJAX from the same
         // teacher does not serialize behind this request. This handler
@@ -115,6 +116,12 @@ class get_submission_data extends external_api {
                 'Whether non-file submission plugins produced content',
                 VALUE_DEFAULT,
                 false,
+            ),
+            'othercontent' => new external_value(
+                PARAM_TEXT,
+                'Names of the submission plugins with content other than online text and files',
+                VALUE_DEFAULT,
+                '',
             ),
             'files' => new external_multiple_structure(
                 new external_single_structure([

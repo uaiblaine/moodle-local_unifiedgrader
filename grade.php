@@ -49,6 +49,11 @@ $PAGE->set_title(
 );
 $PAGE->set_heading($course->fullname);
 $PAGE->set_pagelayout('embedded');
+// Moodle 5.3 adds a "Previous / Next activity" footer to activity pages, which
+// makes no sense inside the grader or its modals.
+if (method_exists($PAGE, 'set_show_navigation_footer')) {
+    $PAGE->set_show_navigation_footer(false);
+}
 $PAGE->set_pagetype('local-unifiedgrader-grade');
 
 // Navbar breadcrumb.
@@ -98,6 +103,7 @@ if ($groupmode != NOGROUPS) {
 
 // Load initial data server-side to avoid loading flash.
 $activityinfo = $adapter->get_activity_info();
+$activityinfo['latepenaltyisrow'] = \local_unifiedgrader\penalty\compat::late_penalty_is_row($adapter->get_type());
 // Resolve initial group IDs for participant fetch.
 $initialgroupids = [];
 if ($currentgroup === '-1') {
@@ -110,6 +116,10 @@ $participants = $adapter->get_participants([
     'sortdir' => 'asc',
     'groups' => $initialgroupids,
 ]);
+// A student named in the URL must be one this teacher may work with.
+if ($userid && !\local_unifiedgrader\access::can_access_student($context, $userid)) {
+    $userid = 0;
+}
 $initialuserid = $userid ?: ($participants[0]['id'] ?? 0);
 
 // Capability flags for the template.
@@ -125,9 +135,12 @@ $canloginas = has_capability('moodle/user:loginas', $coursecontext);
 // silently fail in environments where satsmail isn't deployed.
 $hassatsmail = file_exists($CFG->dirroot . '/local/satsmail/create.php');
 
-// Grade posting status.
-$gradesposted = $adapter->are_grades_posted();
-$gradeshidden = $adapter->get_grades_hidden_value();
+// Grade posting status. Counts follow the cells, so a partly posted class
+// is neither "posted" nor simply "hidden".
+$postingstatus = $adapter->posting_status();
+$gradesposted = $postingstatus['posted'];
+$gradeshidden = $postingstatus['hidden'];
+$canpostclass = $groupmode != SEPARATEGROUPS || has_capability('moodle/site:accessallgroups', $context);
 
 // Quizzes: post grades toggle is hidden by default (quiz review options control visibility).
 // When enabled via setting, the schedule option is still hidden (review options are state-based, not date-based).
@@ -137,6 +150,8 @@ if ($cm->modname === 'quiz') {
     $showpostgrades = !empty(get_config('local_unifiedgrader', 'enable_quiz_post_grades'));
     $showschedulepost = false;
 }
+
+$frictionmode = \local_unifiedgrader\friction\service::mode($cmid);
 
 // Prepare template context.
 $templatedata = [
@@ -179,8 +194,15 @@ $templatedata = [
     'allowmanualgradeoverride' => !empty(get_config('local_unifiedgrader', 'allow_manual_grade_override')),
     'gradesposted' => $gradesposted,
     'gradeshidden' => $gradeshidden,
+    'gradespartial' => !empty($postingstatus['partial']),
+    'postedcount' => (int) $postingstatus['postedcount'],
+    'postedtotal' => (int) $postingstatus['total'],
+    'canpostclass' => $canpostclass,
     'showpostgrades' => $showpostgrades,
     'showschedulepost' => $showschedulepost,
+    'frictioninherit' => $frictionmode === 'inherit',
+    'frictionon' => $frictionmode === 'on',
+    'frictionoff' => $frictionmode === 'off',
     'coursecode' => \local_unifiedgrader\course_code_helper::extract_code($course->shortname),
     'coursefullname' => format_string($course->fullname, true, ['escape' => false]),
     'enablereportform' => !empty(get_config('local_unifiedgrader', 'enable_report_form')),
@@ -208,6 +230,11 @@ if ($cm->modname === 'forum') {
 // for nothing. Forums and quizzes always store feedback.
 $feedbackcommentsenabled = $cm->modname !== 'assign' || $adapter->has_feedback_plugin('comments');
 $templatedata['feedbackcommentsenabled'] = $feedbackcommentsenabled;
+
+// Proctoring: a card in the marking panel and a marker on each student,
+// both filled in after the page has drawn (see amd/src/proctoring.js).
+$showproctoring = \local_unifiedgrader\proctoring\service::applies($cm, $context);
+$templatedata['showproctoring'] = $showproctoring;
 
 // TinyMCE editor setup for the feedback textarea.
 // The textarea is rendered in the static Mustache template, so use_editor() can find it.
@@ -249,6 +276,24 @@ if ($feedbackcommentsenabled && $editor instanceof \editor_tiny\editor) {
 
     $editor->use_editor($feedbackeditorid, $editoroptions, $fpoptions);
     $templatedata['draftitemid'] = $draftitemid;
+}
+
+// TinyMCE configuration for the quiz's per-question comment editors, which the
+// marking panel creates for each student. Uses the options Moodle's own manual
+// grading page gives the comment editor. The draft item IDs are placeholders:
+// each editor gets its question's draft area, from prepare_feedback_draft.
+// Without it (another preferred editor) the comments stay plain textareas.
+$templatedata['questioncommenteditor'] = '';
+if ($cm->modname === 'quiz' && $editor instanceof \editor_tiny\editor) {
+    require_once($CFG->dirroot . '/repository/lib.php');
+    require_once($CFG->dirroot . '/question/engine/lib.php');
+    $templatedata['questioncommenteditor'] = json_encode(
+        (new \local_unifiedgrader\tiny_editor_config())->get_config(
+            $context,
+            \question_utils::get_editor_options($context),
+            \question_utils::get_filepicker_options($context, 0),
+        ),
+    );
 }
 
 // Feedback files filemanager setup (assignfeedback_file).
@@ -319,6 +364,10 @@ if ($cm->modname === 'assign' && class_exists('\local_nida\local\enabled_courses
 $templatedata['langoptionsjson'] = json_encode($langoptions);
 
 // Output.
+$PAGE->requires->js_call_amd('local_unifiedgrader/friction_mode', 'init');
+if ($showproctoring) {
+    $PAGE->requires->js_call_amd('local_unifiedgrader/proctoring', 'init', [$cmid]);
+}
 echo $OUTPUT->header();
 echo $OUTPUT->render_from_template('local_unifiedgrader/grading_interface', $templatedata);
 echo $OUTPUT->footer();

@@ -113,6 +113,7 @@ class save_grade extends external_api {
         $context = \context_module::instance($params['cmid']);
         self::validate_context($context);
         require_capability('local/unifiedgrader:grade', $context);
+        \local_unifiedgrader\access::require_student_access($context, (int) $params['userid']);
 
         // Release the PHP session lock so concurrent AJAX from the same
         // teacher does not serialize behind this request. This handler
@@ -176,8 +177,11 @@ class save_grade extends external_api {
                 }
             }
 
-            // Sync late penalty for forums before saving (ensures penalty record is current).
-            if ($acttype === 'forum') {
+            // Sync late penalty before saving (ensures penalty record is current):
+            // forums only before Moodle 5.3, every type Unified Grader penalises from 5.3.
+            $unifiedlate = \local_unifiedgrader\penalty\compat::unified()
+                && \local_unifiedgrader\penalty\activity_settings::supports($acttype);
+            if ($acttype === 'forum' || $unifiedlate) {
                 $lateinfo = $adapter->calculate_late_penalty($params['userid']);
                 penalty_manager::sync_late_penalty(
                     $params['cmid'],

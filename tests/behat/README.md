@@ -38,6 +38,11 @@ they're flagged for follow-up rather than left as broken tests.
 | `concurrent_save.feature` | A save requested while another is in flight is held and re-run, not dropped |
 | `marking_keyboard_navigation.feature` | Arrow keys navigate students from the page, and never from an editing context |
 | `marking_panel_attempt_selector.feature` | The attempt selector appears for a genuinely multi-attempt submission |
+| `student_feedback_view.feature` | The student feedback page loads for assignments, forums, quizzes and BBB — the v2.12.1 quiz crash |
+| `forum_feedback_banner.feature` | A graded student sees the feedback banner inside a forum discussion, not only on the list of discussions |
+| `quiz_question_comment_editor.feature` | A manually marked quiz question's comment is a TinyMCE editor, and a formatted comment saves and reloads |
+| `navigation_footer.feature` | Moodle 5.3+ only: the "Previous / Next activity" footer is absent from the grader and from the student feedback page, released or not (and present on the activity itself, so the check means something) |
+| `late_penalties.feature` | Moodle 5.3+ only (skipped before): the quiz settings' late penalty switch, a late attempt penalised in the grader and gradebook with no marking, a due date override on the quiz's own page removing it, and no penalty with the switch off |
 
 Worth adding next (not in this scaffold):
 
@@ -82,7 +87,7 @@ the critical tag:
 
 ## Custom step definitions
 
-`behat_local_unifiedgrader.php` ships these plugin-specific steps:
+`behat_local_unifiedgrader.php` ships these plugin-specific steps, among others:
 
 Navigation and input
 
@@ -91,12 +96,20 @@ Navigation and input
 - `I enter "<value>" as the overall grade` — types into the grade input and triggers focusout
 - `I set the rubric score for "<criterion>" to "<score>"` — fills a marking-guide score input by criterion name
 - `I press the <left|right> arrow key from the <editor toolbar|grade input|page body>` — fires a keydown from a chosen origin
+- `I am on the feedback page for activity "<name>"` — opens `view_feedback.php` for that activity
 
 Seeding
 
-- `"<student>" has been graded with feedback "<text>" on "<activity>"` — saves a grade + overall feedback server-side
+- `"<student>" has been graded with feedback "<text>" on "<activity>"` — saves a grade and feedback through the adapter, for any supported activity type
 - `"<student>" has <n> graded submission attempts on "<activity>"` — seeds multi-attempt submission data
 - `the "<plugin/setting>" admin setting is "<value>"` — one-line `set_config()`
+- `the following late penalty rules exist:` — site-wide `gradepenalty_duedate` tiers (`overdue by (days)`, `penalty`)
+- `late penalties are applied to "<name>"` — ticks the activity's "Apply late penalties" switch
+
+Skips
+
+- `Unified Grader manages late penalties on this site` — skips the scenario below Moodle 5.3
+- `Moodle adds an activity navigation footer on this site` — skips the scenario below Moodle 5.3
 
 Assertions
 

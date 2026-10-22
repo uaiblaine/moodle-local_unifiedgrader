@@ -45,16 +45,19 @@ $scope = required_param('scope', PARAM_ALPHA);
 $filename = 'comment-library-' . userdate(time(), '%Y%m%d-%H%M') . '.csv';
 
 if ($scope === 'mine') {
+    \local_unifiedgrader\access::require_library_access();
     $csv = library_csv::export_for_owner($USER->id);
 } else if ($scope === 'bucket') {
     $owner = required_param('owner', PARAM_INT);
     $code = optional_param('code', '', PARAM_TEXT);
 
-    // Exporting your own bucket needs nothing beyond being logged in — this
-    // is what the teacher self-service page's bucket-scoped export link
-    // uses. Exporting anyone else's requires the moderation capability.
+    // Exporting your own bucket needs the same access as the teacher
+    // self-service page, whose bucket-scoped export link this is. Exporting
+    // anyone else's requires the moderation capability.
     if (!library_csv::is_bucket_owner($owner, $USER->id)) {
         require_capability('local/unifiedgrader:moderatelibraries', context_system::instance());
+    } else {
+        \local_unifiedgrader\access::require_library_access();
     }
 
     $csv = library_csv::export_for_owner($owner, $code);

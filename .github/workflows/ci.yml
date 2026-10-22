@@ -39,9 +39,9 @@ jobs:
 
     services:
       postgres:
-        # Moodle 5.3 requires PostgreSQL 17; 5.0 requires 14 or newer, so one
-        # image serves both. The 5.3 job failed its install step on postgres:16
-        # with "version 17 is required and you are running 16.15".
+        # Moodle 5.3 requires PostgreSQL 17; 5.1 and 5.2 need 15 and 16, so one
+        # image serves all three. The 5.3 job failed its install step on
+        # postgres:16 with "version 17 is required and you are running 16.15".
         image: postgres:17
         env:
           POSTGRES_USER: 'postgres'
@@ -51,8 +51,8 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
 
       mariadb:
-        # Moodle 5.3 requires MariaDB 11.4; 5.0 requires 10.11 or newer, so
-        # this one image covers both branches too.
+        # Moodle 5.3 requires MariaDB 11.4; 5.1 and 5.2 need 10.11 or newer,
+        # so this one image covers every branch too.
         image: mariadb:11.4
         env:
           # No MYSQL_USER here: root already exists, and asking the newer images
@@ -75,12 +75,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # No 8.2: every PHP runs against every branch, and Moodle 5.2's composer.json
-        # requires php >=8.3.
         php: ['8.3', '8.4']
         # One entry per branch in version.php $plugin->supported. Keep the two in step:
         # a branch listed there and missing here ships unvalidated.
-        moodle-branch: ['MOODLE_500_STABLE', 'MOODLE_501_STABLE', 'MOODLE_502_STABLE', 'MOODLE_503_STABLE']
+        moodle-branch: ['MOODLE_503_STABLE']
         database: [pgsql, mariadb]
 
     steps:

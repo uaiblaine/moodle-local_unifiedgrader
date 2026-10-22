@@ -45,8 +45,83 @@ $observers = [
         'eventname' => '\mod_assign\event\submission_removed',
         'callback' => '\local_unifiedgrader\observer::handle_submission_removed',
     ],
+    // Assignment comments made in core's submissions list or grader.
+    [
+        'eventname' => '\assignsubmission_comments\event\comment_created',
+        'callback' => '\local_unifiedgrader\observer::handle_assign_comment_created',
+    ],
+    [
+        'eventname' => '\assignsubmission_comments\event\comment_deleted',
+        'callback' => '\local_unifiedgrader\observer::handle_assign_comment_deleted',
+    ],
     [
         'eventname' => '\core\event\course_module_deleted',
         'callback' => '\local_unifiedgrader\observer::handle_course_module_deleted',
+    ],
+
+    // Unified late penalties (Moodle 5.3+; the callbacks do nothing before).
+    [
+        'eventname' => '\core\event\course_module_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_course_module_updated',
+    ],
+    [
+        'eventname' => '\mod_assign\event\extension_granted',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\user_override_created',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\user_override_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\user_override_deleted',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\group_override_created',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\group_override_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_assign\event\group_override_deleted',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\user_override_created',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\user_override_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\user_override_deleted',
+        'callback' => '\local_unifiedgrader\observer::handle_user_duedate_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\group_override_created',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\group_override_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\group_override_deleted',
+        'callback' => '\local_unifiedgrader\observer::handle_group_override_changed',
+    ],
+    [
+        'eventname' => '\mod_quiz\event\attempt_submitted',
+        'callback' => '\local_unifiedgrader\observer::handle_attempt_submitted',
+    ],
+    [
+        'eventname' => '\core\event\grade_item_updated',
+        'callback' => '\local_unifiedgrader\observer::handle_grade_item_updated',
     ],
 ];

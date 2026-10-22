@@ -25,13 +25,6 @@
 defined('MOODLE_INTERNAL') || die();
 
 $functions = [
-    'local_unifiedgrader_get_activity_info' => [
-        'classname' => 'local_unifiedgrader\external\get_activity_info',
-        'description' => 'Get activity metadata for the grading interface.',
-        'type' => 'read',
-        'ajax' => true,
-        'readonlysession' => true,
-    ],
     'local_unifiedgrader_get_participants' => [
         'classname' => 'local_unifiedgrader\external\get_participants',
         'description' => 'Get filtered and sorted participant list with submission status.',
@@ -160,12 +153,6 @@ $functions = [
         'type' => 'write',
         'ajax' => true,
     ],
-    'local_unifiedgrader_delete_annotations' => [
-        'classname' => 'local_unifiedgrader\external\delete_annotations',
-        'description' => 'Delete all annotations for a student submission file.',
-        'type' => 'write',
-        'ajax' => true,
-    ],
     'local_unifiedgrader_get_student_annotations' => [
         'classname' => 'local_unifiedgrader\external\get_student_annotations',
         'description' => 'Get annotations for the current student\'s own submission file (read-only).',
@@ -234,24 +221,6 @@ $functions = [
         'type' => 'write',
         'ajax' => true,
     ],
-    'local_unifiedgrader_delete_user_override' => [
-        'classname' => 'local_unifiedgrader\external\delete_user_override',
-        'description' => 'Delete a user-level override for an activity.',
-        'type' => 'write',
-        'ajax' => true,
-    ],
-    'local_unifiedgrader_delete_duedate_extension' => [
-        'classname' => 'local_unifiedgrader\external\delete_duedate_extension',
-        'description' => 'Delete a quiz duedate extension for a user.',
-        'type' => 'write',
-        'ajax' => true,
-    ],
-    'local_unifiedgrader_delete_forum_extension' => [
-        'classname' => 'local_unifiedgrader\external\delete_forum_extension',
-        'description' => 'Delete a forum due date extension for a user.',
-        'type' => 'write',
-        'ajax' => true,
-    ],
     'local_unifiedgrader_get_penalties' => [
         'classname' => 'local_unifiedgrader\external\get_penalties',
         'description' => 'Get grade penalties for a student in an activity.',
@@ -271,6 +240,26 @@ $functions = [
         'type' => 'write',
         'ajax' => true,
     ],
+    'local_unifiedgrader_get_student_dates' => [
+        'classname' => 'local_unifiedgrader\external\get_student_dates',
+        'description' => 'Load a student\'s dates, extension and overrides for the Dates & extensions dialogue.',
+        'type' => 'read',
+        'ajax' => true,
+        'readonlysession' => true,
+    ],
+    'local_unifiedgrader_preview_student_dates' => [
+        'classname' => 'local_unifiedgrader\external\preview_student_dates',
+        'description' => 'Preview the lateness and late penalty a student would have with an extension.',
+        'type' => 'read',
+        'ajax' => true,
+        'readonlysession' => true,
+    ],
+    'local_unifiedgrader_save_student_dates' => [
+        'classname' => 'local_unifiedgrader\external\save_student_dates',
+        'description' => 'Save a student\'s extension and overrides from the Dates & extensions dialogue.',
+        'type' => 'write',
+        'ajax' => true,
+    ],
     'local_unifiedgrader_clear_all_overrides' => [
         'classname' => 'local_unifiedgrader\external\clear_all_overrides',
         'description' => 'Clear all user-level overrides and extensions for an activity.',
@@ -282,6 +271,13 @@ $functions = [
         'description' => 'Scrape per-user engagement metrics from BBB recording statistics pages.',
         'type' => 'write',
         'ajax' => true,
+    ],
+    'local_unifiedgrader_get_proctoring' => [
+        'classname' => 'local_unifiedgrader\external\get_proctoring',
+        'description' => 'Get proctoring review priorities for the students of a quiz, from the service that proctors it.',
+        'type' => 'read',
+        'ajax' => true,
+        'readonlysession' => true,
     ],
     'local_unifiedgrader_get_referrals' => [
         'classname' => 'local_unifiedgrader\external\get_referrals',
@@ -360,5 +356,17 @@ $functions = [
         'type' => 'read',
         'ajax' => true,
         'readonlysession' => true,
+    ],
+    'local_unifiedgrader_set_friction_mode' => [
+        'classname' => 'local_unifiedgrader\external\set_friction_mode',
+        'description' => 'Set whether an activity uses Friction Feedback.',
+        'type' => 'write',
+        'ajax' => true,
+    ],
+    'local_unifiedgrader_advance_friction' => [
+        'classname' => 'local_unifiedgrader\external\advance_friction',
+        'description' => 'Record that the current student has seen the current feedback step.',
+        'type' => 'write',
+        'ajax' => true,
     ],
 ];

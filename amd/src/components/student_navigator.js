@@ -104,10 +104,9 @@ export default class extends BaseComponent {
         this._setupProfilePopout();
         this._initGroupSelector(state);
 
-        // Prefetch action strings for assign, quiz, and forum activities.
-        if (state.activity.type === 'assign' || state.activity.type === 'quiz' || state.activity.type === 'forum') {
-            await this._prefetchStrings();
-        }
+        // Eye titles are used for every activity. The action labels are only
+        // drawn for assign, quiz, and forum, and are cheap to load alongside.
+        await this._prefetchStrings();
 
         this._renderParticipants({state});
         this._updateCurrentStudent({state});
@@ -151,6 +150,8 @@ export default class extends BaseComponent {
             'override_active',
             'extension_granted',
             'submitted_prefix',
+            'grades_posted_student',
+            'grades_hidden_student',
         ];
         try {
             const values = await getStrings(keys.map(key => ({key, component: 'local_unifiedgrader'})));
@@ -555,6 +556,9 @@ export default class extends BaseComponent {
                 item.classList.add('active');
             }
             item.dataset.userid = p.id;
+            const gradeHidden = Number(p.gradehidden) || 0;
+            const gradePosted = gradeHidden === 0 || (gradeHidden > 1 && gradeHidden * 1000 <= Date.now());
+            item.dataset.gradeposted = gradePosted ? '1' : '0';
 
             const nameSpan = document.createElement('span');
             nameSpan.className = 'small';
@@ -603,6 +607,14 @@ export default class extends BaseComponent {
                 extIcon.title = this._strings?.extension_granted || 'Extension granted';
                 statusWrapper.appendChild(extIcon);
             }
+
+            const postedIcon = document.createElement('i');
+            postedIcon.className = 'fa ' + (gradePosted ? 'fa-eye text-success' : 'fa-eye-slash text-warning');
+            postedIcon.dataset.region = 'grade-posted-icon';
+            postedIcon.title = gradePosted
+                ? (this._strings?.grades_posted_student || '')
+                : (this._strings?.grades_hidden_student || '');
+            statusWrapper.appendChild(postedIcon);
 
             statusWrapper.appendChild(statusBadge);
             item.appendChild(statusWrapper);
@@ -1179,12 +1191,10 @@ export default class extends BaseComponent {
         const actType = state.activity.type;
 
         // Unified "Overrides and Extensions" action — available for all activity types.
-        // Except a rating-graded forum: extensions exist to feed the late
-        // penalty, and there is no penalty to feed when the gradebook value is
-        // core's, recomputed from the ratings on every change.
+        // A forum graded by ratings has it too: it takes no late penalty, but an
+        // extension past the forum's cut-off is what lets the student keep posting.
         const overridesExtensionsActions = [];
-        const canManage = (state.activity.canmanageoverrides || state.activity.canmanageextensions)
-            && state.activity.gradingmode !== 'rating';
+        const canManage = state.activity.canmanageoverrides || state.activity.canmanageextensions;
         if (canManage) {
             overridesExtensionsActions.push({
                 id: 'overrides_extensions',

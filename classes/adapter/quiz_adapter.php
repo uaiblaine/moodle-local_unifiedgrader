@@ -30,6 +30,11 @@ namespace local_unifiedgrader\adapter;
 
 defined('MOODLE_INTERNAL') || die();
 
+use local_unifiedgrader\penalty\activity_settings;
+use local_unifiedgrader\penalty\compat;
+use local_unifiedgrader\penalty\gradebook_writer;
+use local_unifiedgrader\penalty\rules;
+use local_unifiedgrader\penalty\service;
 use local_unifiedgrader\submission_comment_manager;
 
 global $CFG;
@@ -42,7 +47,6 @@ use mod_quiz\quiz_attempt;
 use mod_quiz\quiz_settings;
 use mod_quiz\grade_calculator;
 use question_engine;
-use question_state;
 
 /**
  * Concrete adapter wrapping mod_quiz's grading API.
@@ -75,14 +79,21 @@ class quiz_adapter extends base_adapter {
      * @return array
      */
     public function get_activity_info(): array {
-        $hasduedateplugin = class_exists('\quizaccess_duedate\override_manager');
+        $unified = compat::unified();
+        $hasduedateplugin = compat::use_quizaccess_duedate();
 
-        // Use duedate plugin's quiz-level duedate if available, otherwise fallback to timeclose.
-        $duedate = (int) ($this->quiz->timeclose ?? 0);
-        if ($hasduedateplugin) {
-            $pluginduedate = $this->get_duedate_plugin_duedate();
-            if ($pluginduedate > 0) {
-                $duedate = $pluginduedate;
+        if ($unified) {
+            // Moodle 5.3 quizzes have their own due date. The close time only
+            // ends access; it is not a due date.
+            $duedate = (int) $this->quiz->duedate;
+        } else {
+            // Use duedate plugin's quiz-level duedate if available, otherwise fallback to timeclose.
+            $duedate = (int) ($this->quiz->timeclose ?? 0);
+            if ($hasduedateplugin) {
+                $pluginduedate = $this->get_duedate_plugin_duedate();
+                if ($pluginduedate > 0) {
+                    $duedate = $pluginduedate;
+                }
             }
         }
 
@@ -124,11 +135,14 @@ class quiz_adapter extends base_adapter {
             'teamsubmission' => false,
             'blindmarking' => false,
             'canmanageoverrides' => has_capability('mod/quiz:manageoverrides', $this->context),
-            'hasduedateplugin' => $hasduedateplugin,
-            'canmanageextensions' => $hasduedateplugin
-                && has_capability('quizaccess/duedate:manageoverrides', $this->context),
+            // On 5.3 extensions are core override due dates, so they are always
+            // available. The flag keeps its name for the client.
+            'hasduedateplugin' => $unified || $hasduedateplugin,
+            'canmanageextensions' => $unified
+                ? has_capability('mod/quiz:manageoverrides', $this->context)
+                : $hasduedateplugin && has_capability('quizaccess/duedate:manageoverrides', $this->context),
             'maxattempts' => (int) ($this->quiz->attempts ?? 0),
-            'gradepenaltyenabled' => false,
+            'gradepenaltyenabled' => $unified && activity_settings::is_enabled($this->cm),
         ];
     }
 
@@ -142,6 +156,9 @@ class quiz_adapter extends base_adapter {
         global $DB, $PAGE;
 
         $groupids = $this->get_group_ids($filters);
+        if ($groupids === null) {
+            return [];
+        }
 
         // Get enrolled users who can attempt quizzes (active enrolments only).
         $enrolledusers = $this->get_enrolled_users_multigroup(
@@ -174,21 +191,26 @@ class quiz_adapter extends base_adapter {
         $needsgrading = $this->get_users_needing_grading();
 
         // Batch-load user overrides to avoid N+1 queries.
+        $unified = compat::unified();
         $overrides = $DB->get_records_select(
             'quiz_overrides',
             'quiz = :quizid2 AND userid IS NOT NULL',
             ['quizid2' => $this->quiz->id],
             '',
-            'userid, timeclose',
+            $unified ? 'userid, timeclose, duedate' : 'userid, timeclose',
         );
         $overrideset = [];
+        $duedateextensions = [];
         foreach ($overrides as $ov) {
             $overrideset[(int) $ov->userid] = $ov->timeclose !== null ? (int) $ov->timeclose : null;
+            // On 5.3 an extension is a user override that sets a due date.
+            if ($unified && $ov->duedate !== null) {
+                $duedateextensions[(int) $ov->userid] = (int) $ov->duedate;
+            }
         }
 
         // Batch-load duedate plugin extensions (if plugin is installed).
-        $hasduedateplugin = class_exists('\quizaccess_duedate\override_manager');
-        $duedateextensions = [];
+        $hasduedateplugin = compat::use_quizaccess_duedate();
         if ($hasduedateplugin) {
             $ddoverrides = \quizaccess_duedate\override_manager::get_overrides($this->quiz->id, 'user');
             foreach ($ddoverrides as $ddo) {
@@ -197,6 +219,14 @@ class quiz_adapter extends base_adapter {
         }
 
         $globaltimeclose = (int) ($this->quiz->timeclose ?? 0);
+
+        // Everyone's effective due date at once, where group overrides can
+        // set it; asking for it student by student costs queries for each.
+        $effectiveduedates = ($unified || $hasduedateplugin)
+            ? $this->get_effective_duedates(array_map('intval', array_keys($enrolledusers)))
+            : [];
+
+        $this->attach_user_contextids($enrolledusers);
 
         $result = [];
         foreach ($enrolledusers as $user) {
@@ -210,12 +240,10 @@ class quiz_adapter extends base_adapter {
             $userpicture->size = 64;
             $profileimageurl = $userpicture->get_url($PAGE)->out(false);
 
-            // Effective due date: duedate plugin (if installed) > native override > global timeclose.
-            if ($hasduedateplugin) {
-                $effectiveduedate = (int) \quizaccess_duedate\override_manager::get_effective_duedate(
-                    $this->quiz->id,
-                    $userid
-                );
+            // Effective due date. On 5.3: core user override > group override > quiz due date.
+            // Before: duedate plugin (if installed) > native override > global timeclose.
+            if ($unified || $hasduedateplugin) {
+                $effectiveduedate = $effectiveduedates[$userid] ?? 0;
             } else {
                 $effectiveduedate = $overrideset[$userid] ?? $globaltimeclose;
             }
@@ -273,7 +301,7 @@ class quiz_adapter extends base_adapter {
             return $sortdir === 'desc' ? -$cmp : $cmp;
         });
 
-        return $result;
+        return $this->attach_grade_hidden($result);
     }
 
     /**
@@ -514,7 +542,9 @@ class quiz_adapter extends base_adapter {
         // Calculate late penalty percentage from the duedate plugin settings.
         // Mirrors the observer logic: check first attempt finish time against effective
         // due date (which honours extensions). Does not depend on gradebook feedback text.
-        $latepenaltypct = $this->get_duedate_late_penalty_pct($userid);
+        // From Moodle 5.3 the late penalty is one of this plugin's own penalty rows
+        // and reaches the client with the others instead.
+        $latepenaltypct = compat::unified() ? null : $this->get_duedate_late_penalty_pct($userid);
 
         return [
             'grade' => $hasgrade ? (float) $quizgrade->grade : null,
@@ -752,6 +782,83 @@ class quiz_adapter extends base_adapter {
     }
 
     /**
+     * Prepare a draft area for the comment on each manually marked question.
+     *
+     * Moodle's own manual grading page does this for its comment editors: the
+     * files already attached to the latest comment are copied into a new draft
+     * area, where the editor can add more (images, recorded audio), and the
+     * comment's @@PLUGINFILE@@ links are rewritten to point at the draft copies.
+     * The draft item ID then comes back with the comment on save, see
+     * save_manual_question_grades().
+     *
+     * @param int $userid The student user ID.
+     * @param int $attemptnumber Attempt number (1-based), or -1 for latest.
+     * @return array List of ['slot' => int, 'draftitemid' => int, 'html' => string].
+     */
+    public function prepare_question_comment_drafts(int $userid, int $attemptnumber = -1): array {
+        if ($attemptnumber >= 1) {
+            $attempt = $this->get_attempt_by_number($userid, $attemptnumber);
+        } else {
+            $attempt = $this->get_latest_finished_attempt($userid);
+        }
+        if (!$attempt) {
+            return [];
+        }
+
+        $quba = question_engine::load_questions_usage_by_activity($attempt->uniqueid);
+        $result = [];
+        foreach ($quba->get_slots() as $slot) {
+            $qa = $quba->get_question_attempt($slot);
+            if ($qa->get_behaviour_name() !== 'manualgraded') {
+                continue;
+            }
+
+            [$comment, $commentformat, $step] = $qa->get_manual_comment();
+            if ($step === null) {
+                $draftitemid = file_get_unused_draft_itemid();
+                $html = '';
+            } else {
+                [$draftitemid, $html] = $step->prepare_response_files_draft_itemid_with_text(
+                    'bf_comment',
+                    $this->context->id,
+                    $comment ?? '',
+                );
+                $html = $this->comment_to_editor_html((string) $html, (int) ($commentformat ?? FORMAT_HTML));
+            }
+
+            $result[] = [
+                'slot' => (int) $slot,
+                'draftitemid' => (int) $draftitemid,
+                'html' => $html,
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Convert a stored question comment to HTML the editor can load.
+     *
+     * Before the grader had an editor for these comments it saved the plain
+     * text of a textarea as FORMAT_HTML, so their line breaks never showed. Such
+     * a comment (no tags, but line breaks) gets them back as <br>, which is how
+     * the teacher typed it. Comments in another format are converted to HTML.
+     *
+     * @param string $text The stored comment.
+     * @param int $format Its format, one of the FORMAT_* constants.
+     * @return string
+     */
+    private function comment_to_editor_html(string $text, int $format): string {
+        if ($format !== (int) FORMAT_HTML) {
+            return format_text($text, $format, ['context' => $this->context, 'filter' => false, 'para' => false]);
+        }
+        $trimmed = trim(preg_replace('/<!-- File hash: \w+ -->\s*$/', '', $text));
+        if ($trimmed !== strip_tags($trimmed) || !preg_match('/\R/', $trimmed)) {
+            return $text;
+        }
+        return nl2br($trimmed, false);
+    }
+
+    /**
      * Get editor options for the feedback editor.
      *
      * @return array Editor options compatible with file_save_draft_area_files.
@@ -880,6 +987,23 @@ class quiz_adapter extends base_adapter {
             return false;
         }
 
+        // A pending feedback walk opens this page even while the cell, and the
+        // quiz review options, still hide the mark. The attempt review page is
+        // unchanged. A finished walk keeps this page open, and shows that
+        // student's gradebook mark, without flipping those options.
+        if (\local_unifiedgrader\friction\service::is_pending_user($this, $userid)) {
+            return true;
+        }
+        if (\local_unifiedgrader\friction\service::is_released_user($this, $userid)) {
+            return true;
+        }
+
+        // The gradebook cell stays hidden until the class review options reveal
+        // marks, and a cell can be held back on its own after that.
+        if ($this->grade_is_withheld($userid)) {
+            return false;
+        }
+
         // Review option bit constants from \mod_quiz\question\display_options.
         $laterwhileopen = 0x00100;
         $afterclose     = 0x00010;
@@ -892,6 +1016,15 @@ class quiz_adapter extends base_adapter {
         }
         // Quiz is still open (or no close date) — check LATER_WHILE_OPEN bit.
         return (bool) ($reviewmarks & $laterwhileopen);
+    }
+
+    /**
+     * A finished walk releases Unified Grader feedback while the item stays hidden.
+     *
+     * @return bool
+     */
+    public function release_outlives_hidden_item(): bool {
+        return true;
     }
 
     /**
@@ -923,14 +1056,31 @@ class quiz_adapter extends base_adapter {
      * their attempts, they must enable reviewattempt themselves — UG
      * deliberately does not flip that switch.
      *
-     * Scheduling (hidden > 1) is not supported because review options are
-     * state-based (open/closed), not date-based.
+     * Scheduling (hidden > 1) is not supported for the whole class, because review
+     * options are state-based (open/closed), not date-based. A student or group
+     * post does not touch those options: it writes the gradebook cell only, and
+     * a timestamp on that cell is allowed.
      *
-     * @param int $hidden 0 = post (visible), 1 = hide. Timestamps not supported.
-     * @throws \moodle_exception If a timestamp is passed (scheduling not supported).
+     * @param int $hidden 0 = post (visible), 1 = hide, or a Unix timestamp for one student or group.
+     * @param int[] $userids Students to change. Empty for the whole class.
+     * @return array{posted:bool,partial:bool,hidden:int,postedcount:int,total:int,lifted:bool}
+     * @throws \moodle_exception If a timestamp is passed for the whole class.
      */
-    public function set_grades_posted(int $hidden): void {
+    public function set_grades_posted(int $hidden, array $userids = []): array {
         global $DB;
+
+        $userids = array_values(array_unique(array_filter(
+            array_map('intval', $userids),
+            fn(int $id): bool => $id > 0,
+        )));
+        if ($userids) {
+            // Cells only. The review options, and the item flag they own, stay as they are.
+            $status = \local_unifiedgrader\grades\release::apply($this, $hidden, $userids, false);
+            \local_unifiedgrader\friction\service::settle($this, $hidden, $userids);
+            $fresh = $this->posting_status();
+            $fresh['lifted'] = !empty($status['lifted']);
+            return $fresh;
+        }
 
         if ($hidden > 1) {
             throw new \moodle_exception('quiz_post_grades_no_schedule', 'local_unifiedgrader');
@@ -958,15 +1108,34 @@ class quiz_adapter extends base_adapter {
         }
 
         $DB->update_record('quiz', $quiz);
+        $this->quiz = $quiz;
+
+        // Cells first. The grade sync below rewrites the item flag from the
+        // review options, and a finished walk puts that flag back while its
+        // cell is open. Hiding the cells first leaves a class hide hidden.
+        $item = $this->fetch_grade_item();
+        if ($item && $hidden === 0) {
+            // A class post clears cells that a previous per-student hide had set.
+            \local_unifiedgrader\grades\release::set_every_cell($item, 0);
+        } else if ($item) {
+            \local_unifiedgrader\grades\release::set_every_cell($item, 1);
+        }
 
         // Re-sync grade item hidden status with the updated review options.
         quiz_grade_item_update($quiz);
+
+        \local_unifiedgrader\friction\service::settle($this, $hidden, []);
+        return $this->posting_status();
     }
 
     /**
      * Get the effective due date for a specific user.
      *
-     * When the quizaccess_duedate plugin is installed, delegates to its override
+     * On Moodle 5.3: the user override's due date, else the latest group override
+     * due date, else the quiz's own due date (core's resolution). 0 means no due
+     * date: the close time is not used in its place.
+     *
+     * Before 5.3, when the quizaccess_duedate plugin is installed, delegates to its override
      * manager (which handles user overrides, group overrides, and the quiz default).
      * Otherwise falls back to native quiz_overrides.timeclose.
      *
@@ -974,7 +1143,12 @@ class quiz_adapter extends base_adapter {
      * @return int The effective due date timestamp (0 if no due date).
      */
     public function get_effective_duedate(int $userid): int {
-        if (class_exists('\quizaccess_duedate\override_manager')) {
+        if (compat::unified()) {
+            $times = \mod_quiz\local\override_manager::get_effective_times((int) $this->quiz->id, $userid);
+            return (int) ($times['duedate'] ?? $this->quiz->duedate);
+        }
+
+        if (compat::use_quizaccess_duedate()) {
             return (int) \quizaccess_duedate\override_manager::get_effective_duedate(
                 $this->quiz->id,
                 $userid
@@ -994,6 +1168,84 @@ class quiz_adapter extends base_adapter {
         }
 
         return $globaltimeclose;
+    }
+
+    /**
+     * The effective due date of each listed student, in a fixed number of queries.
+     *
+     * Gives each student what get_effective_duedate() gives them, without
+     * asking for them one at a time. It follows the same order: the student's
+     * own override, then their groups' overrides, then the quiz's due date.
+     * Among several group overrides the latest wins; on Moodle 5.3 one set to
+     * "no due date" (0) wins over any date, as it does in core.
+     *
+     * Only for Moodle 5.3, or earlier with the quizaccess_duedate rule.
+     *
+     * @param int[] $userids The students.
+     * @return int[] Due date (0 = none), keyed by user ID.
+     */
+    public function get_effective_duedates(array $userids): array {
+        global $DB;
+
+        $unified = compat::unified();
+        if ($unified) {
+            $default = (int) $this->quiz->duedate;
+            $overrides = $DB->get_records_select(
+                'quiz_overrides',
+                'quiz = :quizid AND duedate IS NOT NULL',
+                ['quizid' => $this->quiz->id],
+                '',
+                'id, userid, groupid, duedate',
+            );
+        } else {
+            // The rule gives no due date to anyone when the quiz itself has none.
+            $default = $this->get_duedate_plugin_duedate();
+            if ($default <= 0) {
+                return array_fill_keys($userids, 0);
+            }
+            $overrides = \quizaccess_duedate\override_manager::get_overrides((int) $this->quiz->id);
+        }
+
+        $userdates = [];
+        $groupdates = [];
+        foreach ($overrides as $override) {
+            if (!empty($override->userid)) {
+                $userdates[(int) $override->userid] = (int) $override->duedate;
+            } else if (!empty($override->groupid)) {
+                $groupdates[(int) $override->groupid] = (int) $override->duedate;
+            }
+        }
+
+        // Who is in the groups that have an override. Usually there are none.
+        $datesbyuser = [];
+        if ($groupdates) {
+            [$insql, $params] = $DB->get_in_or_equal(array_keys($groupdates), SQL_PARAMS_NAMED);
+            $params['courseid'] = $this->course->id;
+            $members = $DB->get_recordset_sql(
+                "SELECT gm.id, gm.userid, gm.groupid
+                   FROM {groups_members} gm
+                   JOIN {groups} g ON g.id = gm.groupid
+                  WHERE g.courseid = :courseid AND gm.groupid {$insql}",
+                $params,
+            );
+            foreach ($members as $member) {
+                $datesbyuser[(int) $member->userid][] = $groupdates[(int) $member->groupid];
+            }
+            $members->close();
+        }
+
+        $result = [];
+        foreach ($userids as $userid) {
+            if (isset($userdates[$userid])) {
+                $result[$userid] = $userdates[$userid];
+            } else if (!empty($datesbyuser[$userid])) {
+                $dates = $datesbyuser[$userid];
+                $result[$userid] = ($unified && in_array(0, $dates, true)) ? 0 : max($dates);
+            } else {
+                $result[$userid] = $default;
+            }
+        }
+        return $result;
     }
 
     /**
@@ -1021,6 +1273,8 @@ class quiz_adapter extends base_adapter {
             'timelimit' => $record->timelimit !== null ? (int) $record->timelimit : null,
             'attempts' => $record->attempts !== null ? (int) $record->attempts : null,
             'password' => $record->password,
+            // Moodle 5.3+ only; the column does not exist before.
+            'duedate' => isset($record->duedate) ? (int) $record->duedate : null,
         ];
     }
 
@@ -1042,9 +1296,31 @@ class quiz_adapter extends base_adapter {
             return true;
         }
 
-        $this->quizobj->get_override_manager()->delete_overrides(overrideids: [$record->id]);
+        $this->quizobj->get_override_manager()->delete_overrides_by_id([(int) $record->id]);
+        self::refresh_duedate_calendar_events((int) $this->quiz->id);
+        service::resync((int) $this->cm->id, $userid);
 
         return true;
+    }
+
+    /**
+     * Put back the quizaccess_duedate calendar events a core override change removed.
+     *
+     * Saving or deleting a core quiz override runs quiz_update_events(), which rewrites or
+     * deletes the student's calendar events on the quiz, the due date extension's included.
+     * Call this after any such change. A duedate plugin older than v2.0 has no refresh
+     * method and is left alone. On Moodle 5.3 core owns the due date events, so
+     * there is nothing to put back.
+     *
+     * @param int $quizid The quiz ID.
+     */
+    public static function refresh_duedate_calendar_events(int $quizid): void {
+        if (!compat::use_quizaccess_duedate()) {
+            return;
+        }
+        if (method_exists('\quizaccess_duedate\override_manager', 'refresh_calendar_events')) {
+            \quizaccess_duedate\override_manager::refresh_calendar_events($quizid);
+        }
     }
 
     // Duedate plugin extension methods.
@@ -1056,11 +1332,21 @@ class quiz_adapter extends base_adapter {
      * @return array|null Array with 'id' and 'duedate', or null if none.
      */
     public function get_duedate_extension(int $userid): ?array {
+        global $DB;
+
+        if (compat::unified()) {
+            // On 5.3 an extension is the due date on the student's core override.
+            $record = $DB->get_record('quiz_overrides', ['quiz' => $this->quiz->id, 'userid' => $userid]);
+            if (!$record || $record->duedate === null) {
+                return null;
+            }
+            return ['id' => (int) $record->id, 'duedate' => (int) $record->duedate];
+        }
+
         if (!class_exists('\quizaccess_duedate\override_manager')) {
             return null;
         }
 
-        global $DB;
         $record = $DB->get_record('quizaccess_duedate_overrides', [
             'quizid' => $this->quiz->id,
             'userid' => $userid,
@@ -1081,6 +1367,10 @@ class quiz_adapter extends base_adapter {
      * @param int $duedate Extension due date timestamp.
      */
     public function save_duedate_extension(int $userid, int $duedate): void {
+        if (compat::unified()) {
+            $this->save_core_override_duedate($userid, $duedate);
+            return;
+        }
         if (!class_exists('\quizaccess_duedate\override_manager')) {
             throw new \coding_exception('quizaccess_duedate plugin is not installed');
         }
@@ -1117,6 +1407,10 @@ class quiz_adapter extends base_adapter {
      * @param int $userid The student user ID.
      */
     public function delete_duedate_extension(int $userid): void {
+        if (compat::unified()) {
+            $this->save_core_override_duedate($userid, null);
+            return;
+        }
         if (!class_exists('\quizaccess_duedate\override_manager')) {
             return;
         }
@@ -1138,6 +1432,189 @@ class quiz_adapter extends base_adapter {
         );
     }
 
+    /**
+     * Set or clear the due date on a student's core quiz override (Moodle 5.3+).
+     *
+     * Keeps whatever else the override sets. When the due date moves past the
+     * student's close time, the close time is raised to match, or the student
+     * could not use the extension. An override left with nothing set is deleted,
+     * since core will not save an empty one. Then the student's penalties are
+     * resynced.
+     *
+     * @param int $userid The student user ID.
+     * @param int|null $duedate The extended due date, or null to remove it.
+     */
+    private function save_core_override_duedate(int $userid, ?int $duedate): void {
+        global $DB;
+
+        $manager = $this->quizobj->get_override_manager();
+        $existing = $DB->get_record('quiz_overrides', ['quiz' => $this->quiz->id, 'userid' => $userid]);
+        if (!$existing && $duedate === null) {
+            return;
+        }
+
+        $data = $existing ? (array) $existing : ['quiz' => (int) $this->quiz->id, 'userid' => $userid];
+        $data['duedate'] = $duedate;
+
+        if ($duedate !== null) {
+            $close = isset($data['timeclose']) ? (int) $data['timeclose'] : (int) $this->quiz->timeclose;
+            if ($close > 0 && $duedate > $close) {
+                $data['timeclose'] = $duedate;
+            }
+        }
+
+        $settings = ['timeopen', 'timeclose', 'duedate', 'timelimit', 'attempts', 'password'];
+        $remaining = array_filter(
+            $manager->parse_formdata($data),
+            fn($value, $key) => in_array($key, $settings, true) && $value !== null,
+            ARRAY_FILTER_USE_BOTH,
+        );
+        if ($existing && !$remaining) {
+            $manager->delete_overrides_by_id([(int) $existing->id]);
+        } else if ($remaining) {
+            $manager->save_override($data);
+        }
+
+        service::resync((int) $this->cm->id, $userid);
+    }
+
+    /**
+     * The quiz's maximum grade; 0 for scales and "no grade".
+     *
+     * @return float
+     */
+    protected function get_penalty_max_grade(): float {
+        return max(0.0, (float) $this->quiz->grade);
+    }
+
+    /**
+     * Work out a student's late penalty from the due date penalty rules (Moodle 5.3+).
+     *
+     * Only the student's first genuine attempt counts (see find_first_genuine_attempt()):
+     *
+     * - no genuine attempt yet: no penalty;
+     * - submitted by the effective due date: no penalty, and later attempts can
+     *   reach full marks even if they are late;
+     * - submitted after it: that attempt's lateness sets the penalty, which comes
+     *   off the final quiz grade whatever later attempts score. A first genuine
+     *   attempt two days late under a 10% rule caps the quiz at 90%.
+     *
+     * Because nothing but that one attempt and the due date feed into it, the
+     * penalty stays pegged across later attempts and is safe to recompute.
+     *
+     * @param int $userid The student user ID.
+     * @param int|null $duedate A due date to test instead of the student's effective one (a preview).
+     * @return array|null ['percentage' => int, 'dayslate' => int], or null.
+     */
+    public function calculate_late_penalty(int $userid, ?int $duedate = null): ?array {
+        if (!compat::unified() || !activity_settings::is_enabled($this->cm)) {
+            return null;
+        }
+        if ((float) $this->quiz->grade <= 0) {
+            return null;
+        }
+
+        $duedate = $duedate ?? $this->get_effective_duedate($userid);
+        if ($duedate <= 0) {
+            return null;
+        }
+
+        $submitted = $this->get_late_reference_time($userid);
+        if ($submitted <= 0) {
+            return null;
+        }
+
+        return rules::late_penalty($this->cm, $submitted, $duedate);
+    }
+
+    /**
+     * When the student's quiz counts as submitted.
+     *
+     * From Moodle 5.3 the first genuine attempt (see find_first_genuine_attempt());
+     * before, as the quizaccess_duedate rule counts it, the first finished attempt.
+     *
+     * @param int $userid The student user ID.
+     * @return int Timestamp, or 0 when no attempt counts yet.
+     */
+    public function get_late_reference_time(int $userid): int {
+        global $DB;
+
+        if (compat::unified()) {
+            $attempt = $this->find_first_genuine_attempt($userid);
+            return $attempt ? (int) $attempt->timefinish : 0;
+        }
+        return (int) $DB->get_field_sql(
+            'SELECT MIN(timefinish) FROM {quiz_attempts}
+              WHERE quiz = :quizid AND userid = :userid AND preview = 0 AND timefinish > 0',
+            ['quizid' => $this->quiz->id, 'userid' => $userid],
+        );
+    }
+
+    /**
+     * The student's first attempt that is a real try at the quiz.
+     *
+     * A submitted (finished, not preview) attempt in which the student answered
+     * at least the share of scoring questions set in the plugin's
+     * quizgenuineattemptpct setting. An attempt submitted empty, or nearly so,
+     * does not count, so a student cannot secure an on-time attempt with a blank
+     * submission and then take their time over the real one. A question counts
+     * as answered unless the student left it without a response (gave up).
+     *
+     * Attempts are checked oldest first and the search stops at the first match,
+     * so usually only one question usage is loaded.
+     *
+     * @param int $userid The student user ID.
+     * @return \stdClass|null The attempt (id, uniqueid, attempt, timefinish), or null.
+     */
+    public function find_first_genuine_attempt(int $userid): ?\stdClass {
+        global $DB;
+
+        $attempts = $DB->get_records_select(
+            'quiz_attempts',
+            'quiz = :quizid AND userid = :userid AND preview = 0 AND state = :finished',
+            ['quizid' => $this->quiz->id, 'userid' => $userid, 'finished' => quiz_attempt::FINISHED],
+            'timefinish ASC, attempt ASC',
+            'id, uniqueid, attempt, timefinish',
+        );
+        $threshold = self::get_genuine_attempt_pct();
+
+        foreach ($attempts as $attempt) {
+            if ($threshold <= 0) {
+                return $attempt;
+            }
+            $quba = question_engine::load_questions_usage_by_activity((int) $attempt->uniqueid);
+            $scoring = 0;
+            $answered = 0;
+            foreach ($quba->get_slots() as $slot) {
+                if ($quba->get_question_max_mark($slot) <= 0) {
+                    continue;
+                }
+                $scoring++;
+                if (!$quba->get_question_state($slot)->is_gave_up()) {
+                    $answered++;
+                }
+            }
+            if ($scoring === 0 || $answered * 100 >= $threshold * $scoring) {
+                return $attempt;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The share of scoring questions (0-100) an attempt must answer to count.
+     *
+     * @return int
+     */
+    public static function get_genuine_attempt_pct(): int {
+        $pct = get_config('local_unifiedgrader', 'quizgenuineattemptpct');
+        if ($pct === false || $pct === '') {
+            return 50;
+        }
+        return max(0, min(100, (int) $pct));
+    }
+
     // Private helpers.
 
     /**
@@ -1154,7 +1631,7 @@ class quiz_adapter extends base_adapter {
     public function get_duedate_late_penalty_pct(int $userid): ?int {
         global $DB;
 
-        if (!class_exists('\quizaccess_duedate\override_manager')) {
+        if (!compat::use_quizaccess_duedate()) {
             return null;
         }
 
@@ -1408,7 +1885,9 @@ class quiz_adapter extends base_adapter {
      * Save manual grades for individual questions in an attempt.
      *
      * @param \stdClass $attempt The attempt record.
-     * @param array $questions Per-slot grading data: {slot: {mark, comment}, ...}.
+     * @param array $questions Per-slot grading data: {slot: {mark, comment, draftitemid}, ...}.
+     *                         draftitemid is the comment editor's draft area, see
+     *                         prepare_question_comment_drafts(); 0 for a plain textarea.
      */
     private function save_manual_question_grades(\stdClass $attempt, array $questions): void {
         global $DB;
@@ -1422,7 +1901,17 @@ class quiz_adapter extends base_adapter {
         foreach ($questions as $slot => $data) {
             $slot = (int) $slot;
             $mark = isset($data['mark']) && $data['mark'] !== '' ? (float) $data['mark'] : null;
-            $comment = $data['comment'] ?? '';
+            $commenttext = (string) ($data['comment'] ?? '');
+            $draftitemid = (int) ($data['draftitemid'] ?? 0);
+
+            // A comment from the editor saves its draft area's files (images,
+            // recorded audio) with the grading step, as Moodle's manual grading
+            // page does. The saver also turns the draft links into @@PLUGINFILE@@
+            // ones, and appends a hash of the files, so the question engine
+            // discards a save that changes neither the text nor the files.
+            $comment = $draftitemid > 0
+                ? new \question_file_saver($draftitemid, 'question', 'response_bf_comment', $commenttext)
+                : $commenttext;
 
             $qa = $quba->get_question_attempt($slot);
             $maxmark = (float) $qa->get_max_mark();
@@ -1434,7 +1923,7 @@ class quiz_adapter extends base_adapter {
                 // Mark provided — save both mark and comment.
                 $quba->manual_grade($slot, $comment, $mark, FORMAT_HTML);
                 $gradedslots[$slot] = (int) $qa->get_question_id();
-            } else if (!empty($comment)) {
+            } else if (trim($commenttext) !== '') {
                 // Comment-only update — reuse the existing mark if available.
                 // When $existingmark is null (never graded), manual_grade() with
                 // null mark saves just the comment via the question engine's
@@ -1635,6 +2124,9 @@ class quiz_adapter extends base_adapter {
                 $html .= '<div class="border-top pt-2 mt-2">';
                 $html .= '<div class="small fw-bold mb-1">'
                     . get_string('teachercomment', 'local_unifiedgrader') . ':</div>';
+                // Point @@PLUGINFILE@@ links (images, recorded audio) at the
+                // comment's files, as the question engine's format_comment() does.
+                $comment = $qa->rewrite_response_pluginfile_urls($comment, $this->context->id, 'bf_comment', $commentstep);
                 $html .= '<div class="small text-muted">'
                     . format_text($comment, $commentformat ?? FORMAT_HTML, ['context' => $this->context])
                     . '</div>';
@@ -1818,6 +2310,25 @@ class quiz_adapter extends base_adapter {
         ]);
         if ($enginegrade === false || $enginegrade === null) {
             return;
+        }
+
+        // Moodle 5.3: push the engine's total as it stands and record the
+        // deduction beside it in the gradebook. Nothing is pinned, so a new
+        // attempt or a regrade flows through, and the user_graded observer puts
+        // the deduction back. A course frozen on the pre-5.3 penalty maths falls
+        // through to the pinning path below.
+        if (compat::unified()) {
+            $quizrecord = clone $this->quiz;
+            $quizrecord->cmidnumber = $this->cm->idnumber;
+            quiz_grade_item_update($quizrecord, (object) [
+                'userid' => $userid,
+                'rawgrade' => (float) $enginegrade,
+                'dategraded' => time(),
+                'datesubmitted' => null,
+            ]);
+            if ($this->apply_gradebook_deduction($userid) !== gradebook_writer::LEGACY) {
+                return;
+            }
         }
 
         $deduction = \local_unifiedgrader\penalty_manager::get_total_deduction(

@@ -71,12 +71,18 @@ export const init = (containerId) => {
         userGroupIds = [];
     }
     const draftitemid = parseInt(container.dataset.draftitemid, 10) || 0;
+    // TinyMCE configuration for quiz question comment editors (JSON), or ''.
+    const questionCommentEditor = container.dataset.questioncommenteditor || '';
     const feedbackfilesdraftid = parseInt(container.dataset.feedbackfilesdraftid, 10) || 0;
     const hasfeedbackfileplugin = container.dataset.hasfeedbackfileplugin === '1';
     const feedbackfilesclientid = container.dataset.feedbackfilesclientid || '';
     const allowmanualgradeoverride = container.dataset.allowmanualgradeoverride === '1';
     const gradesPosted = container.dataset.gradesposted === '1';
     const gradesHidden = parseInt(container.dataset.gradeshidden, 10) || 0;
+    const gradesPartial = container.dataset.gradespartial === '1';
+    const postedCount = parseInt(container.dataset.postedcount, 10) || 0;
+    const postedTotal = parseInt(container.dataset.postedtotal, 10) || 0;
+    const canPostClass = container.dataset.canpostclass !== '0';
     const canloginas = container.dataset.canloginas === '1';
     const hassatsmail = container.dataset.hassatsmail === '1';
     const enableReportForm = container.dataset.enablereportform === '1';
@@ -139,6 +145,7 @@ export const init = (containerId) => {
             status: '',
             content: '',
             hascontent: false,
+            othercontent: '',
             files: [],
             onlinetext: '',
             onlinetexthtml: '',
@@ -152,6 +159,9 @@ export const init = (containerId) => {
             grade: null,
             feedback: '',
             feedbackdraft: '',
+            // Quizzes only: JSON list of {slot, draftitemid, html}, one per
+            // manually marked question, for the per-question comment editors.
+            questioncomments: '[]',
             feedbackformat: 1,
             rubricdata: '',
             gradingdefinition: '',
@@ -215,7 +225,12 @@ export const init = (containerId) => {
             posting: false,
             gradesPosted: gradesPosted,
             gradesHidden: gradesHidden,
+            gradesPartial: gradesPartial,
+            postedCount: postedCount,
+            postedTotal: postedTotal,
+            canPostClass: canPostClass,
             draftitemid: draftitemid,
+            questionCommentEditor: questionCommentEditor,
             feedbackfilesdraftid: feedbackfilesdraftid,
             hasfeedbackfileplugin: hasfeedbackfileplugin,
             feedbackfilesclientid: feedbackfilesclientid,

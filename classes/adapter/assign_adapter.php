@@ -29,6 +29,10 @@ defined('MOODLE_INTERNAL') || die();
 global $CFG;
 require_once($CFG->dirroot . '/mod/assign/locallib.php');
 require_once($CFG->dirroot . '/grade/grading/lib.php');
+use local_unifiedgrader\penalty\activity_settings;
+use local_unifiedgrader\penalty\compat;
+use local_unifiedgrader\penalty\gradebook_writer;
+use local_unifiedgrader\penalty\rules;
 use local_unifiedgrader\submission_comment_manager;
 
 /**
@@ -102,7 +106,9 @@ class assign_adapter extends base_adapter {
             'blindmarking' => (bool) $instance->blindmarking,
             'canmanageoverrides' => has_capability('mod/assign:manageoverrides', $this->context),
             'maxattempts' => (int) $instance->maxattempts,
-            'gradepenaltyenabled' => !empty($instance->gradepenalty),
+            'gradepenaltyenabled' => compat::unified()
+                ? activity_settings::is_enabled($this->cm)
+                : !empty($instance->gradepenalty),
         ];
     }
 
@@ -116,6 +122,9 @@ class assign_adapter extends base_adapter {
         global $PAGE;
 
         $groupids = $this->get_group_ids($filters);
+        if ($groupids === null) {
+            return [];
+        }
         $instance = $this->assign->get_instance();
 
         // Fetch participants (list_participants only takes a single group ID).
@@ -168,13 +177,15 @@ class assign_adapter extends base_adapter {
         // Batch-load the latest submission, grade, and flags for every participant.
         // The non-batched code path called assign::get_user_submission(), get_user_grade(),
         // and get_user_flags() per user — 3N round-trips for the marking dashboard's
-        // main use case. Team submissions still go through the per-user path because
-        // assign_submission rows are keyed by groupid, not userid.
+        // main use case. Team submissions are keyed by group, so they are batched
+        // separately, by load_team_submissions().
         $submissionsbyuser = [];
         $gradesbyuser = [];
         $flagsbyuser = [];
 
-        if (empty($instance->teamsubmission)) {
+        if (!empty($instance->teamsubmission)) {
+            [$submissionsbyuser, $gradesbyuser] = $this->load_team_submissions(array_keys($participants));
+        } else {
             // Latest submission per user (groupid=0 for individual submissions).
             $subsql = "SELECT s.*
                          FROM {assign_submission} s
@@ -218,23 +229,31 @@ class assign_adapter extends base_adapter {
             $flagsbyuser[(int) $f->userid] = $f;
         }
 
+        // Blind marking shows each student's anonymous ID in place of their name.
+        // One query finds them all; a student without one yet gets it from core.
+        $uniqueids = [];
+        if ($instance->blindmarking) {
+            $uniqueids = $DB->get_records_menu(
+                'assign_user_mapping',
+                ['assignment' => $instance->id],
+                '',
+                'userid, id',
+            );
+        }
+
+        $this->attach_user_contextids($participants);
+
         $result = [];
         foreach ($participants as $participant) {
             $uidlookup = (int) $participant->id;
-            if (!empty($instance->teamsubmission)) {
-                // Team submissions are keyed by group — fall back to the per-user
-                // helper so we don't have to reimplement get_group_submission().
-                $submission = $this->get_submission($participant->id) ?: null;
-                $grade = $this->assign->get_user_grade($participant->id, false) ?: null;
-            } else {
-                $submission = $submissionsbyuser[$uidlookup] ?? null;
-                $grade = $gradesbyuser[$uidlookup] ?? null;
-            }
+            $submission = $submissionsbyuser[$uidlookup] ?? null;
+            $grade = $gradesbyuser[$uidlookup] ?? null;
             $status = $this->resolve_status($submission, $grade);
 
             // Build display name (handle blind marking).
             $fullname = $instance->blindmarking
-                ? get_string('hiddenuser', 'assign') . ' ' . $this->assign->get_uniqueid_for_user($participant->id)
+                ? get_string('hiddenuser', 'assign') . ' '
+                    . ($uniqueids[$uidlookup] ?? $this->assign->get_uniqueid_for_user($participant->id))
                 : fullname($participant);
 
             // Profile image URL.
@@ -303,7 +322,86 @@ class assign_adapter extends base_adapter {
             return $sortdir === 'desc' ? -$cmp : $cmp;
         });
 
-        return $result;
+        return $this->attach_grade_hidden($result);
+    }
+
+    /**
+     * The team submission and grade of each listed student, in a fixed number of queries.
+     *
+     * Follows assign::get_group_submission() and assign::get_user_grade(): a
+     * student in exactly one group of the team grouping shares that group's
+     * latest submission, and anyone else falls into the default group (0).
+     * The grade is the student's own row for that submission's attempt, or
+     * their latest when there is no submission.
+     *
+     * Unlike the core calls it replaces, it never creates a missing
+     * submission row.
+     *
+     * @param int[] $userids The students.
+     * @return array[] [submissions keyed by user ID, grades keyed by user ID].
+     */
+    private function load_team_submissions(array $userids): array {
+        global $DB;
+
+        $instance = $this->assign->get_instance();
+
+        // Each group's latest submission (team submissions have userid 0).
+        $sql = "SELECT s.*
+                  FROM {assign_submission} s
+                  JOIN (SELECT groupid, MAX(attemptnumber) AS maxa
+                          FROM {assign_submission}
+                         WHERE assignment = :aid AND userid = 0
+                         GROUP BY groupid) m
+                    ON m.groupid = s.groupid AND m.maxa = s.attemptnumber
+                 WHERE s.assignment = :aid2 AND s.userid = 0";
+        $submissionsbygroup = [];
+        foreach ($DB->get_records_sql($sql, ['aid' => $instance->id, 'aid2' => $instance->id]) as $sub) {
+            $submissionsbygroup[(int) $sub->groupid] = $sub;
+        }
+
+        // Which groups each student is in, as assign::get_all_groups() sees them.
+        $groups = groups_get_all_groups(
+            $this->course->id,
+            0,
+            (int) $instance->teamsubmissiongroupingid,
+            'g.id',
+            true,
+            true,
+        );
+        $groupsbyuser = [];
+        foreach ($groups as $group) {
+            foreach ($group->members as $memberid) {
+                $groupsbyuser[(int) $memberid][] = (int) $group->id;
+            }
+        }
+
+        // Every grade row, by student then attempt.
+        $gradesbyattempt = [];
+        $graderows = $DB->get_records('assign_grades', ['assignment' => $instance->id], 'attemptnumber ASC');
+        foreach ($graderows as $grade) {
+            $gradesbyattempt[(int) $grade->userid][(int) $grade->attemptnumber] = $grade;
+        }
+
+        $submissions = [];
+        $grades = [];
+        foreach ($userids as $userid) {
+            $usergroups = $groupsbyuser[$userid] ?? [];
+            $groupid = count($usergroups) === 1 ? $usergroups[0] : 0;
+            $submission = $submissionsbygroup[$groupid] ?? null;
+            $usergrades = $gradesbyattempt[$userid] ?? [];
+
+            if ($submission) {
+                $submissions[$userid] = $submission;
+                $grade = $usergrades[(int) $submission->attemptnumber] ?? null;
+            } else {
+                $grade = $usergrades ? end($usergrades) : null;
+            }
+            if ($grade) {
+                $grades[$userid] = $grade;
+            }
+        }
+
+        return [$submissions, $grades];
     }
 
     /**
@@ -336,10 +434,21 @@ class assign_adapter extends base_adapter {
      * @return array List of arrays with keys: id, attemptnumber, status, timemodified, graded.
      */
     public function get_attempts(int $userid): array {
+        global $DB;
+
         $submissions = $this->assign->get_all_submissions($userid);
+
+        // The grade of every attempt, in one query.
+        $gradesbyattempt = $DB->get_records(
+            'assign_grades',
+            ['assignment' => $this->assign->get_instance()->id, 'userid' => $userid],
+            '',
+            'attemptnumber, id, grade',
+        );
+
         $result = [];
         foreach ($submissions as $sub) {
-            $grade = $this->assign->get_user_grade($userid, false, (int) $sub->attemptnumber);
+            $grade = $gradesbyattempt[(int) $sub->attemptnumber] ?? null;
             // For "Grade: None" assignments, grade = -1 means graded (teacher interacted).
             $isgraded = false;
             if ($grade && $grade->grade !== null) {
@@ -395,11 +504,17 @@ class assign_adapter extends base_adapter {
 
         $onlinetext = $this->get_onlinetext($submission);
 
-        // Get submission comment count from our custom table.
+        // Get submission comment count from our custom table, after bringing
+        // in any comment made in core's submissions list or grader.
+        \local_unifiedgrader\assign_comment_sync::import_missing((int) $this->cm->id, $userid);
         $commentcount = submission_comment_manager::count_comments($this->cm->id, $userid);
 
         // Check whether any non-file submission plugins have actual student content.
+        // Online text is shown inline on its own, so the other plugins with
+        // content (a YouTube link, say) are named separately: the grader gives
+        // them their own view, or they would be hidden behind the text.
         $hascontent = false;
+        $othercontent = [];
         foreach ($this->assign->get_submission_plugins() as $plugin) {
             if (
                 $plugin->is_enabled() && $plugin->is_visible()
@@ -407,7 +522,9 @@ class assign_adapter extends base_adapter {
                     && !$plugin->is_empty($submission)
             ) {
                 $hascontent = true;
-                break;
+                if (!in_array($plugin->get_type(), ['onlinetext', 'byblos'], true)) {
+                    $othercontent[] = $plugin->get_name();
+                }
             }
         }
 
@@ -432,6 +549,7 @@ class assign_adapter extends base_adapter {
             'status' => $submission->status,
             'content' => $this->get_submission_content($submission),
             'hascontent' => $hascontent,
+            'othercontent' => implode(', ', $othercontent),
             'files' => $files,
             'onlinetext' => $onlinetext,
             'onlinetexthtml' => $this->get_onlinetext_html($submission),
@@ -562,8 +680,13 @@ class assign_adapter extends base_adapter {
         // extension was granted after the student submitted). The penalty field
         // in assign_grades is not recalculated by Moodle core when extensions
         // change, so we must cross-check against the effective due date.
+        //
+        // From Moodle 5.3 the late penalty is one of this plugin's own penalty
+        // rows and reaches the client with the others, unless core still
+        // penalises this assignment.
         $latepenaltypct = null;
-        if ($grade && isset($grade->penalty) && $grade->penalty > 0 && $grade->grade > 0) {
+        $corepenalty = !compat::unified() || $this->core_penalty_active();
+        if ($corepenalty && $grade && isset($grade->penalty) && $grade->penalty > 0 && $grade->grade > 0) {
             $effectiveduedate = $this->get_effective_duedate($userid);
             $submission = $this->get_submission($userid);
             // Use timemodified (final submit) for the lateness comparison,
@@ -801,7 +924,15 @@ class assign_adapter extends base_adapter {
             $data->{$elementname . '_filemanager'} = $feedbackfilesdraftid;
         }
 
-        $this->assign->save_grade($userid, $data);
+        // Moodle 5.3 refuses to write a mark while workflow is released or ready
+        // for release. A student posted before they have a grade is in that state,
+        // so lift it for this save and put it back afterwards.
+        $restoreworkflow = $this->unlock_released_workflow($userid);
+        try {
+            $this->assign->save_grade($userid, $data);
+        } finally {
+            $this->restore_workflow_state($userid, $restoreworkflow);
+        }
 
         // Moodle core only pushes grades to the gradebook for the latest attempt.
         // If this save triggered a reopen (new attempt), or we're re-grading a
@@ -1290,29 +1421,13 @@ class assign_adapter extends base_adapter {
             }
         }
 
-        // 2. Check the gradebook item is not hidden.
-        $gradeitem = \grade_item::fetch([
-            'itemtype' => 'mod',
-            'itemmodule' => 'assign',
-            'iteminstance' => $instance->id,
-            'itemnumber' => 0,
-            'courseid' => $this->course->id,
-        ]);
-        if ($gradeitem && $gradeitem->is_hidden()) {
+        // 2. The gradebook cell (and the item behind it) must be visible.
+        // A pending feedback walk hides the cell and still opens this page.
+        if ($this->withheld_blocks_release($userid)) {
             return false;
         }
 
-        // 3. Check the student's own gradebook grade is not hidden. The teacher can
-        // hide one student's grade, or hide it until a date, with the item visible;
-        // core's assignment page then withholds that student's grade too.
-        if ($gradeitem) {
-            $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
-            if ($gradegrade && $gradegrade->is_hidden()) {
-                return false;
-            }
-        }
-
-        // 4. If marking workflow is enabled, require state = RELEASED.
+        // 3. If marking workflow is enabled, require state = RELEASED.
         if (!empty($instance->markingworkflow)) {
             $workflowstate = $this->assign->get_user_flags($userid, false);
             if (!$workflowstate || $workflowstate->workflowstate !== ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
@@ -1335,67 +1450,144 @@ class assign_adapter extends base_adapter {
      * @return bool
      */
     public function are_grades_posted(): bool {
-        global $DB;
-
         $instance = $this->assign->get_instance();
         if (empty($instance->markingworkflow)) {
             return parent::are_grades_posted();
         }
-
-        $graded = $DB->count_records_select(
-            'assign_grades',
-            'assignment = ? AND grade IS NOT NULL AND grade >= 0',
-            [$instance->id],
-        );
-        if ($graded === 0) {
+        // A visible gradebook cell is not enough: core also withholds the grade
+        // and its feedback until the workflow state is released. Nobody graded
+        // is not a released class.
+        if (!parent::are_grades_posted()) {
             return false;
         }
-        // Any graded user not yet released → not fully posted.
-        $notreleased = $DB->count_records_sql(
-            "SELECT COUNT(DISTINCT g.userid)
-               FROM {assign_grades} g
-          LEFT JOIN {assign_user_flags} uf
-                 ON uf.assignment = g.assignment AND uf.userid = g.userid
-              WHERE g.assignment = :aid
-                AND g.grade IS NOT NULL AND g.grade >= 0
-                AND (uf.workflowstate IS NULL OR uf.workflowstate <> :released)",
-            ['aid' => $instance->id, 'released' => ASSIGN_MARKING_WORKFLOW_STATE_RELEASED],
-        );
-        return $notreleased === 0;
+        [$graded, $notreleased] = $this->workflow_release_counts();
+        return $graded > 0 && $notreleased === 0;
     }
 
     /**
-     * Post or hide grades for students.
+     * Posting status, with marking workflow taken off the posted count.
      *
-     * For a marking-workflow assignment, posting/hiding maps to
-     * releasing/un-releasing the per-user workflow state (which is what actually
-     * gates student visibility of the grade AND feedback), firing
-     * workflow_state_updated for each affected user so downstream observers —
-     * e.g. Nida feedback translation — run. Without marking workflow, defers to
-     * the base grade-item hidden toggle.
+     * A graded student whose workflow is not released does not count as posted,
+     * even when their gradebook cell is visible.
      *
-     * @param int $hidden 0 = post (release/visible); non-zero = hide.
+     * @return array{posted:bool,partial:bool,hidden:int,postedcount:int,total:int,lifted:bool}
      */
-    public function set_grades_posted(int $hidden): void {
-        global $DB, $CFG;
+    public function posting_status(): array {
+        $status = parent::posting_status();
+        $instance = $this->assign->get_instance();
+        if (empty($instance->markingworkflow)) {
+            return $status;
+        }
+        [$graded, $notreleased] = $this->workflow_release_counts();
+        if ($graded === 0) {
+            $status['posted'] = false;
+            $status['partial'] = false;
+            return $status;
+        }
+        $status['postedcount'] = max(0, $status['postedcount'] - $notreleased);
+        $status['posted'] = $status['posted'] && $notreleased === 0;
+        $status['partial'] = !$status['posted']
+            && $status['postedcount'] > 0
+            && $status['postedcount'] < $status['total'];
+        return $status;
+    }
+
+    /**
+     * Post or hide grades for the class or for the given students.
+     *
+     * Marking workflow moves with the same people. Posting, including a
+     * scheduled post, sets their state to released, so the cell's timestamp is
+     * what holds the grade back until the date. Hiding sets ready for release.
+     * A partial post sets the state even for a student who has no grade yet,
+     * otherwise the grade saved later would stay blocked.
+     *
+     * When a partial post reveals the grade item, students who stay hidden are
+     * marked mailed so the assignment cron does not write to them. The cron
+     * looks at the item flag, not the cell.
+     *
+     * @param int $hidden 0 = post (release/visible), 1 = hide, or a Unix timestamp.
+     * @param int[] $userids Students to change. Empty for the whole class.
+     * @return array{posted:bool,partial:bool,hidden:int,postedcount:int,total:int,lifted:bool}
+     */
+    public function set_grades_posted(int $hidden, array $userids = []): array {
+        $status = parent::set_grades_posted($hidden, $userids);
+        $this->apply_workflow($hidden, $userids);
+        $this->apply_mailed($hidden, $userids, !empty($status['lifted']));
+        // The assignment cron mails a visible item and ignores the cell. A held
+        // mark stays unmailed, including when the fail-safe later opens the cell.
+        $this->hold_friction_mail();
+        return $this->posting_status();
+    }
+
+    /**
+     * Let one grade save through while marking workflow has the value locked.
+     *
+     * Moodle 5.3 treats ready-for-release and released as read-only, so
+     * assign::save_grade() keeps the previous mark. Posting a student before
+     * the mark exists, then grading them, would otherwise drop the mark.
+     * The previous state is returned so the caller can put it back.
+     *
+     * @param int $userid
+     * @return string|null State to restore, or null when nothing was changed.
+     */
+    private function unlock_released_workflow(int $userid): ?string {
+        if (!method_exists($this->assign, 'grading_locked') || !$this->assign->grading_locked($userid)) {
+            return null;
+        }
+        $flags = $this->assign->get_user_flags($userid, false);
+        if (!$flags) {
+            return null;
+        }
+        $previous = $flags->workflowstate ?? '';
+        if ($previous === '') {
+            return null;
+        }
+        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_INMARKING;
+        $this->assign->update_user_flags($flags);
+        return $previous;
+    }
+
+    /**
+     * Put a marking-workflow state back after a grade save.
+     *
+     * @param int $userid
+     * @param string|null $state
+     */
+    private function restore_workflow_state(int $userid, ?string $state): void {
+        if ($state === null) {
+            return;
+        }
+        $flags = $this->assign->get_user_flags($userid, true);
+        if (($flags->workflowstate ?? '') === $state) {
+            return;
+        }
+        $flags->workflowstate = $state;
+        $this->assign->update_user_flags($flags);
+    }
+
+    /**
+     * Move marking workflow for the students this post covers.
+     *
+     * The class (an empty list) keeps the previous behaviour: only students who
+     * already have a grade. A named list is set whether or not they have one.
+     *
+     * @param int $hidden
+     * @param int[] $userids
+     */
+    private function apply_workflow(int $hidden, array $userids): void {
+        global $CFG;
 
         $instance = $this->assign->get_instance();
         if (empty($instance->markingworkflow)) {
-            parent::set_grades_posted($hidden);
             return;
         }
-
         require_once($CFG->dirroot . '/mod/assign/locallib.php');
-        $newstate = ($hidden === 0)
+        $newstate = ($hidden === 0 || $hidden > 1)
             ? ASSIGN_MARKING_WORKFLOW_STATE_RELEASED
             : ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE;
-
-        $userids = $DB->get_fieldset_sql(
-            "SELECT DISTINCT userid
-               FROM {assign_grades}
-              WHERE assignment = ? AND grade IS NOT NULL AND grade >= 0",
-            [$instance->id],
-        );
+        if (!$userids) {
+            $userids = $this->graded_userids();
+        }
         foreach ($userids as $userid) {
             $flags = $this->assign->get_user_flags($userid, true);
             if ($flags->workflowstate === $newstate) {
@@ -1406,9 +1598,119 @@ class assign_adapter extends base_adapter {
             $user = \core_user::get_user($userid);
             \mod_assign\event\workflow_state_updated::create_from_user($this->assign, $user, $newstate)->trigger();
         }
+    }
 
-        // Also apply the gradebook hidden flag so gradebook visibility follows.
-        parent::set_grades_posted($hidden);
+    /**
+     * Keep the assignment's grade-release mail in step with a partial post.
+     *
+     * The cron mails grades where the item is visible and mailed is 0. It does
+     * not look at the cell. Revealing the item would therefore mail every graded
+     * student, so the ones who stay hidden are marked sent. A later post that
+     * releases one of them clears that mark. A class post leaves the flags alone.
+     *
+     * @param int $hidden
+     * @param int[] $userids
+     * @param bool $lifted Whether this post revealed the grade item.
+     */
+    private function apply_mailed(int $hidden, array $userids, bool $lifted): void {
+        $graded = $this->graded_userids();
+        if (!$graded) {
+            return;
+        }
+        if ($lifted) {
+            // Only a grade that is visible now should be mailed. A scheduled cell
+            // still holds the grade back, and the cron would not wait for it.
+            $released = $hidden === 0 ? array_flip($userids) : [];
+            foreach ($graded as $userid) {
+                $this->set_mailed($userid, isset($released[$userid]) ? 0 : 1);
+            }
+            return;
+        }
+        if ($hidden === 0 && $userids) {
+            $wanted = array_flip($userids);
+            foreach ($graded as $userid) {
+                if (isset($wanted[$userid])) {
+                    $this->set_mailed($userid, 0);
+                }
+            }
+        }
+    }
+
+    /**
+     * Keep the assignment release mail from sending while a feedback walk is open.
+     *
+     * apply_mailed() marks a just-posted student as unsent. That would mail the
+     * mark itself. Put those students back to sent. The fail-safe does not clear
+     * this, so a mark opened days later is not emailed.
+     */
+    private function hold_friction_mail(): void {
+        $item = $this->fetch_grade_item();
+        if (!$item) {
+            return;
+        }
+        foreach (\local_unifiedgrader\friction\service::pending_userids((int) $item->id) as $userid) {
+            $this->set_mailed($userid, 1);
+        }
+    }
+
+    /**
+     * Set one student's mailed flag, creating the flags row when they have none.
+     *
+     * @param int $userid
+     * @param int $mailed 0 unsent, 1 sent.
+     */
+    private function set_mailed(int $userid, int $mailed): void {
+        $flags = $this->assign->get_user_flags($userid, true);
+        if ((int) $flags->mailed === $mailed) {
+            return;
+        }
+        $flags->mailed = $mailed;
+        $this->assign->update_user_flags($flags);
+    }
+
+    /**
+     * Students who have a real assignment grade.
+     *
+     * @return int[]
+     */
+    private function graded_userids(): array {
+        global $DB;
+
+        $instance = $this->assign->get_instance();
+        return array_map('intval', $DB->get_fieldset_sql(
+            "SELECT DISTINCT userid
+               FROM {assign_grades}
+              WHERE assignment = ? AND grade IS NOT NULL AND grade >= 0",
+            [$instance->id],
+        ));
+    }
+
+    /**
+     * How many graded students there are, and how many of them are not released.
+     *
+     * @return array{0:int,1:int} [graded, not released]
+     */
+    private function workflow_release_counts(): array {
+        global $DB, $CFG;
+
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $instance = $this->assign->get_instance();
+        $graded = $DB->count_records_select(
+            'assign_grades',
+            'assignment = ? AND grade IS NOT NULL AND grade >= 0',
+            [$instance->id],
+        );
+        $notreleased = $DB->count_records_sql(
+            "SELECT COUNT(DISTINCT g.userid)
+               FROM {assign_grades} g
+          LEFT JOIN {assign_user_flags} uf
+                 ON uf.assignment = g.assignment AND uf.userid = g.userid
+              WHERE g.assignment = :aid
+                AND g.grade IS NOT NULL AND g.grade >= 0
+                AND (uf.workflowstate IS NULL OR uf.workflowstate <> :released)",
+            ['aid' => $instance->id, 'released' => ASSIGN_MARKING_WORKFLOW_STATE_RELEASED],
+        );
+        return [(int) $graded, (int) $notreleased];
     }
 
     /**
@@ -1569,8 +1871,13 @@ class assign_adapter extends base_adapter {
         // forum_adapter already handles this correctly with a ternary.
         $penalised = max(0, (float) $grade->grade - $deduction);
 
+        // Moodle 5.3: push the mark as given and record the deduction beside it
+        // in the gradebook. Not while core still penalises this assignment: its
+        // late deduction is written to the same field, and would be erased.
+        $unified = compat::unified() && !$this->core_penalty_active();
+
         $gradebookgrade = [
-            'rawgrade' => $penalised,
+            'rawgrade' => $unified ? (float) $grade->grade : $penalised,
             'userid' => $userid,
             'usermodified' => (int) $grade->grader,
             'datesubmitted' => null,
@@ -1588,6 +1895,134 @@ class assign_adapter extends base_adapter {
         $updateinstance->cmidnumber = $this->cm->idnumber;
         $updateinstance->gradefeedbackenabled = $this->assign->is_gradebook_feedback_enabled();
         assign_grade_item_update($updateinstance, $gradebookgrade);
+
+        if (!$unified) {
+            return;
+        }
+        if ($this->apply_gradebook_deduction($userid) === gradebook_writer::LEGACY) {
+            // A course frozen on the pre-5.3 penalty maths: push the reduced mark.
+            $gradebookgrade['rawgrade'] = $penalised;
+            assign_grade_item_update($updateinstance, $gradebookgrade);
+        }
+    }
+
+    /**
+     * Whether core's own late penalty still applies to this assignment.
+     *
+     * Only while an administrator leaves 'assign' switched on under Site
+     * administration > Grades > Grade penalties and the assignment's own
+     * "Apply penalties" box is ticked. Unified Grader then leaves the late
+     * penalty to core rather than deducting it twice.
+     *
+     * @return bool
+     */
+    public function core_penalty_active(): bool {
+        // The per-assignment half mirrors \mod_assign\penalty\helper::is_penalty_enabled();
+        // the site half is checked by core's penalty_manager before it deducts anything.
+        $instance = $this->assign->get_instance();
+        return !empty($instance->gradepenalty)
+            && !empty($instance->duedate)
+            && (float) $instance->grade >= GRADE_TYPE_VALUE
+            && \core_grades\penalty_manager::is_penalty_enabled_for_module('assign');
+    }
+
+    /**
+     * Write the student's total penalty deduction to the gradebook (Moodle 5.3+).
+     *
+     * Skipped while core still penalises this assignment: core writes its late
+     * deduction to the same field, and this would overwrite it.
+     *
+     * assign_grades.penalty is not mirrored. Core's assignment pages show the
+     * current grade from the gradebook, which carries this deduction and its
+     * penalty icon; core resets that field itself whenever a grade is pushed.
+     *
+     * @param int $userid The student user ID.
+     * @return string A gradebook_writer result constant.
+     */
+    public function apply_gradebook_deduction(int $userid): string {
+        if ($this->core_penalty_active()) {
+            return gradebook_writer::SKIPPED;
+        }
+        return parent::apply_gradebook_deduction($userid);
+    }
+
+    /**
+     * The assignment's maximum grade; 0 for scales and "no grade".
+     *
+     * @return float
+     */
+    protected function get_penalty_max_grade(): float {
+        return max(0.0, (float) $this->assign->get_instance()->grade);
+    }
+
+    /**
+     * Work out a student's late penalty from the due date penalty rules (Moodle 5.3+).
+     *
+     * Uses the same inputs as core's \mod_assign\penalty\helper::apply_penalty_to_user():
+     * the graded attempt's submission (the group's, for team submissions), its last
+     * modification time, the user or group override due date, and the later of that
+     * and any extension. Before a grade exists, the latest submission is used, so
+     * the grader can show the penalty that will apply.
+     *
+     * @param int $userid The student user ID.
+     * @param int|null $duedate A due date to test instead of the student's effective one (a preview).
+     * @return array|null ['percentage' => int, 'dayslate' => int], or null.
+     */
+    public function calculate_late_penalty(int $userid, ?int $duedate = null): ?array {
+        if (!compat::unified() || !activity_settings::is_enabled($this->cm) || $this->core_penalty_active()) {
+            return null;
+        }
+
+        $instance = $this->assign->get_instance();
+        if ((float) $instance->grade <= 0) {
+            return null;
+        }
+
+        $submitted = $this->get_late_reference_time($userid);
+        if ($submitted <= 0) {
+            return null;
+        }
+
+        if ($duedate === null) {
+            $duedate = (int) ($this->assign->override_exists($userid)->duedate ?? $instance->duedate);
+            $flags = $this->assign->get_user_flags($userid, false);
+            if ($flags) {
+                $duedate = max((int) $flags->extensionduedate, $duedate);
+            }
+        }
+
+        return rules::late_penalty($this->cm, $submitted, $duedate);
+    }
+
+    /**
+     * When the student's work counts as submitted: the graded attempt's submission.
+     *
+     * The same submission core's penalty helper uses: the latest graded attempt
+     * (the group's, for team submissions), or the latest attempt before grading,
+     * by its last modification time.
+     *
+     * @param int $userid The student user ID.
+     * @return int Timestamp, or 0 when nothing has been submitted.
+     */
+    public function get_late_reference_time(int $userid): int {
+        global $DB;
+
+        $instance = $this->assign->get_instance();
+        $attemptnumber = $DB->get_field_sql(
+            'SELECT MAX(attemptnumber)
+               FROM {assign_grades}
+              WHERE assignment = :assignid AND userid = :userid AND grade >= 0',
+            ['assignid' => $instance->id, 'userid' => $userid],
+        );
+        $attemptnumber = ($attemptnumber === false || $attemptnumber === null) ? -1 : (int) $attemptnumber;
+
+        $submission = $instance->teamsubmission
+            ? $this->assign->get_group_submission($userid, 0, false, $attemptnumber)
+            : $this->assign->get_user_submission($userid, false, $attemptnumber);
+        if (!$submission || $submission->status === ASSIGN_SUBMISSION_STATUS_NEW || empty($submission->timemodified)) {
+            return 0;
+        }
+        return (int) $submission->timemodified;
     }
 
     /**
