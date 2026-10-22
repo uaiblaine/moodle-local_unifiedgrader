@@ -175,6 +175,12 @@ export default class extends BaseComponent {
         // Resolvers for callers of 'unifiedgrader:requestsave' that wait for a
         // held request to read the form (see _releaseSaveWaiters).
         this._saveWaiters = [];
+        // Resolvers for callers of 'unifiedgrader:flushsaves' that wait for every
+        // grade save to end (see _releaseIdleWaiters).
+        this._idleWaiters = [];
+        // The form the server last refused: {userid, form}, or null. Flushing for
+        // a post does not send it again (see the 'unifiedgrader:flushsaves' listener).
+        this._refusedForm = null;
         // Set when _updateUI sees a grade save start (ui.gradesaving), cleared
         // when it handles that save's end. Only that end may mark the form clean.
         this._saveCycleOpen = false;
@@ -241,6 +247,31 @@ export default class extends BaseComponent {
             if (this._saveInFlight && this._pendingSaveRequest && Array.isArray(e.detail?.waitfor)) {
                 e.detail.waitfor.push(new Promise((resolve) => {
                     this._saveWaiters.push(resolve);
+                }));
+            }
+        });
+
+        // A caller about to act on the stored grade (posting grades) asks for every
+        // grade save to end first. An unsaved edit is saved now rather than after
+        // its autosave delay, and detail.waitfor gets a promise that settles once
+        // no save is in flight or held. The caller then reads the dirty flags: an
+        // edit still unsaved was refused or queued offline, and is not stored.
+        // A form the server refused and the teacher has not changed since is not
+        // sent again: it would only be refused again, with the same dialogue.
+        document.addEventListener('unifiedgrader:flushsaves', (e) => {
+            const refused = this._refusedForm;
+            const unchanged = refused?.userid === this.reactive.state.currentUser?.id
+                && refused?.form === this._formSnapshot();
+            if ((DirtyTracker.isDirty('grade') || DirtyTracker.isDirty('feedback')) && !unchanged) {
+                if (this._autoSaveTimer) {
+                    clearTimeout(this._autoSaveTimer);
+                    this._autoSaveTimer = null;
+                }
+                this._handleSaveGrade();
+            }
+            if (this._saveInFlight && Array.isArray(e.detail?.waitfor)) {
+                e.detail.waitfor.push(new Promise((resolve) => {
+                    this._idleWaiters.push(resolve);
                 }));
             }
         });
@@ -1553,8 +1584,10 @@ export default class extends BaseComponent {
         this._saveInFlight = false;
 
         if (state.ui.lastsavefailed) {
+            this._refusedForm = {userid: this._dispatchedFor, form: this._dispatchedForm};
             this._afterRefusedSave(state);
             this._releaseSaveWaiters();
+            this._releaseIdleWaiters();
             return;
         }
 
@@ -1594,6 +1627,7 @@ export default class extends BaseComponent {
             this._handleSaveGrade(pending.explicit);
         }
         this._releaseSaveWaiters();
+        this._releaseIdleWaiters();
     }
 
     /**
@@ -1611,6 +1645,7 @@ export default class extends BaseComponent {
         DirtyTracker.setSnapshot('feedback', this._getEditorContent());
         DirtyTracker.markClean('grade');
         DirtyTracker.markClean('feedback');
+        this._refusedForm = null;
 
         if (cmid && userid) {
             OfflineCache.remove(cmid, userid, 'grade');
@@ -1662,6 +1697,22 @@ export default class extends BaseComponent {
     _releaseSaveWaiters() {
         const waiters = this._saveWaiters;
         this._saveWaiters = [];
+        waiters.forEach((resolve) => resolve());
+    }
+
+    /**
+     * Release the callers waiting for every grade save to end.
+     *
+     * Called where a grade save ends, after any held request has been re-run.
+     * A re-run is a save of its own, so while one is in flight the callers keep
+     * waiting for it to end too.
+     */
+    _releaseIdleWaiters() {
+        if (this._saveInFlight) {
+            return;
+        }
+        const waiters = this._idleWaiters;
+        this._idleWaiters = [];
         waiters.forEach((resolve) => resolve());
     }
 

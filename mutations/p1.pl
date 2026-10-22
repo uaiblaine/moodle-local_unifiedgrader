@@ -1,0 +1,1 @@
+s/(        \/\/ The save ran in marking, so core took the mark out of the gradebook\.\n        if \(\$state === ASSIGN_MARKING_WORKFLOW_STATE_RELEASED\) \{\n)            \$this->push_released_grade\(\$userid\);\n/$1/ or die "p1 did not match";

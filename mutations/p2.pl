@@ -1,0 +1,1 @@
+s/(            \$this->assign->update_user_flags\(\$flags\);\n            if \(\$newstate === ASSIGN_MARKING_WORKFLOW_STATE_RELEASED\) \{\n)                \$this->push_released_grade\(\$userid\);\n/$1/ or die "p2 did not match";

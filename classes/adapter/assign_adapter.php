@@ -1510,8 +1510,11 @@ class assign_adapter extends base_adapter {
      * @return array{posted:bool,partial:bool,hidden:int,postedcount:int,total:int,lifted:bool}
      */
     public function set_grades_posted(int $hidden, array $userids = []): array {
-        $status = parent::set_grades_posted($hidden, $userids);
+        // Workflow first: releasing a student pushes their mark to the gradebook
+        // (push_released_grade()), which rewrites the cell's timemodified, and the
+        // Friction Feedback walk the parent opens is keyed to that value.
         $this->apply_workflow($hidden, $userids);
+        $status = parent::set_grades_posted($hidden, $userids);
         $this->apply_mailed($hidden, $userids, !empty($status['lifted']));
         // The assignment cron mails a visible item and ignores the cell. A held
         // mark stays unmailed, including when the fail-safe later opens the cell.
@@ -1563,6 +1566,43 @@ class assign_adapter extends base_adapter {
         }
         $flags->workflowstate = $state;
         $this->assign->update_user_flags($flags);
+        // The save ran in marking, so core took the mark out of the gradebook.
+        if ($state === ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
+            $this->push_released_grade($userid);
+        }
+    }
+
+    /**
+     * Put a released student's mark in the gradebook, as core's own release does.
+     *
+     * Core keeps a mark out of the gradebook until marking workflow says released
+     * (assign::gradebook_item_update() removes it in any other state), and pushes it
+     * when its release action calls update_grade()
+     * ({@see \assign::process_set_batch_marking_workflow_state()}). A state set with
+     * update_user_flags() alone pushes nothing, so a student released that way,
+     * or put back to released after a save, kept an empty gradebook cell.
+     *
+     * @param int $userid
+     */
+    private function push_released_grade(int $userid): void {
+        // Core's release skips these students too: a locked or overridden cell
+        // keeps its value, and update_grade() would still rewrite assign_grades
+        // and may open a new attempt.
+        if ($this->assign->grading_disabled($userid)) {
+            return;
+        }
+        $grade = $this->assign->get_user_grade($userid, false);
+        if (!$grade) {
+            return;
+        }
+        $type = str_replace('assignfeedback_', '', (string) $this->assign->get_admin_config()->feedback_plugin_for_gradebook);
+        $plugin = $this->assign->get_feedback_plugin_by_type($type);
+        if ($plugin && $plugin->is_enabled() && $plugin->is_visible()) {
+            $grade->feedbacktext = $plugin->text_for_gradebook($grade);
+            $grade->feedbackformat = $plugin->format_for_gradebook($grade);
+            $grade->feedbackfiles = $plugin->files_for_gradebook($grade);
+        }
+        $this->assign->update_grade($grade);
     }
 
     /**
@@ -1595,6 +1635,9 @@ class assign_adapter extends base_adapter {
             }
             $flags->workflowstate = $newstate;
             $this->assign->update_user_flags($flags);
+            if ($newstate === ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
+                $this->push_released_grade($userid);
+            }
             $user = \core_user::get_user($userid);
             \mod_assign\event\workflow_state_updated::create_from_user($this->assign, $user, $newstate)->trigger();
         }

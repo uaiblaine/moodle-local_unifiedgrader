@@ -90,3 +90,19 @@ Feature: Teachers post grades for one student, one group, or the whole class
     And I log in as "student2"
     And I am on the feedback page for activity "Essay 1"
     Then I should see "Your feedback is not yet available"
+
+  Scenario: A grade change the server refused is not posted over
+    Given the gradebook grade for "student1" on "Essay 1" is locked
+    When I log in as "teacher1"
+    And I am on the Unified Grader for activity "Essay 1"
+    And the marking panel has loaded
+    And I click on "Ann Able" "button"
+    And I enter "18" as the overall grade and close the refusal
+    Then the refusal said "locked or overridden in the gradebook"
+    # The 18 is still in the box, unsaved, and the server holds Ann's 15. Fails if
+    # the post goes out regardless: it would release the 15 the teacher replaced.
+    When I post grades for the open student
+    Then the Unified Grader warned "Nothing was posted"
+    And the open student's grade is hidden
+    And the grade status shows "Grades hidden"
+    And the saved grade for "student1" on "Essay 1" is "15"

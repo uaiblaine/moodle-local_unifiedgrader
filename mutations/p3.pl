@@ -1,0 +1,1 @@
+s/(\n)        \$this->apply_workflow\(\$hidden, \$userids\);\n        \$status = parent::set_grades_posted\(\$hidden, \$userids\);\n/$1        \$status = parent::set_grades_posted(\$hidden, \$userids);\n        \$this->apply_workflow(\$hidden, \$userids);\n/ or die "p3 did not match";
