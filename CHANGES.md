@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.0.1+uai.2 (2026102201)
+
+- **Posting grades waits for the grade being saved.** Posting, now or on a date, for the open student, the
+  groups in view or the class first saves an unsaved grade or feedback edit and waits for every save in
+  flight, or held behind one, to end. If an edit is still unsaved afterwards (the server refused it, or it
+  waits offline for a retry), nothing is posted and the grader says so, instead of releasing the mark the
+  server still holds. A refused edit the teacher has not changed is not sent again. Hiding grades is
+  unchanged.
+- **Moodle 5.3's release lock is pinned for grades, clears and resets.** Once marking workflow says ready for
+  release or released, a teacher who may release can still change the mark: a grade, a "-" clear and a
+  "--" reset all reach the assignment and, once released, the gradebook, and none moves the workflow state.
+  A marker who may not release is refused all three. Tests only; no code change was needed.
+
 ## v3.0.1+uai.1 (2026102200)
 
 Upstream 3.0.1 merged into the fork (upstream 2.12.2 to 3.0.1: late penalties owned by Unified Grader on

@@ -25,8 +25,8 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_unifiedgrader';
-$plugin->version   = 2026102200; // YYYYMMDDXX format.
-$plugin->release   = '3.0.1+uai.1'; // Upstream 3.0.1 plus downstream fixes.
+$plugin->version   = 2026102201; // YYYYMMDDXX format.
+$plugin->release   = '3.0.1+uai.2'; // Upstream 3.0.1 plus downstream fixes.
 $plugin->requires  = 2026100500; // Moodle 5.3.
 $plugin->supported = [503, 503];  // Moodle 5.3 only; 5.0 to 5.2 are on MOODLE_502_STABLE.
 $plugin->maturity  = MATURITY_STABLE;

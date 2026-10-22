@@ -27,6 +27,9 @@
 
 import {BaseComponent} from 'core/reactive';
 import {get_string as getString} from 'core/str';
+import Notification from 'core/notification';
+import * as DirtyTracker from 'local_unifiedgrader/dirty_tracker';
+import * as SaveQueue from 'local_unifiedgrader/save_queue';
 
 export default class extends BaseComponent {
 
@@ -35,6 +38,8 @@ export default class extends BaseComponent {
      */
     create() {
         this.name = 'post_grades_toggle';
+        // Set while a post waits for the grade saves to end (see _dispatch).
+        this._waitingForSaves = false;
         this.selectors = {
             STATUS_BTN: '[data-action="post-grades-status"]',
             POST_NOW: '[data-action="post-grades-now"]',
@@ -124,7 +129,7 @@ export default class extends BaseComponent {
             return;
         }
 
-        this._dispatch(0, 'class');
+        await this._dispatch(0, 'class');
     }
 
     /**
@@ -147,7 +152,7 @@ export default class extends BaseComponent {
             return;
         }
 
-        this._dispatch(1, 'class');
+        await this._dispatch(1, 'class');
     }
 
     /**
@@ -188,7 +193,7 @@ export default class extends BaseComponent {
         if (!window.confirm(confirmMsg)) {
             return;
         }
-        this._dispatch(hidden, scope);
+        await this._dispatch(hidden, scope);
     }
 
     /**
@@ -223,20 +228,69 @@ export default class extends BaseComponent {
         if (scope === 'groups' && this._groupsInView(state).length === 0) {
             scope = state.ui.canPostClass ? 'class' : 'user';
         }
-        this._dispatch(timestamp, scope);
+        await this._dispatch(timestamp, scope);
     }
 
     /**
      * Send the post to the server.
      *
+     * Posting, now or on a date, releases the marks the server holds, so every
+     * grade save has to end first: one still in flight, or held behind it, would
+     * otherwise land after the post and the student would be released the
+     * previous mark. If an edit is still unsaved afterwards, refused or queued
+     * offline, nothing is posted. Hiding releases nothing and goes straight out.
+     *
      * @param {number} hidden
      * @param {string} scope class, user, or groups.
      */
-    _dispatch(hidden, scope) {
+    async _dispatch(hidden, scope) {
+        // One post at a time: a second click while the saves settle would post twice.
+        if (this._waitingForSaves) {
+            return;
+        }
+        if (hidden !== 1) {
+            this._waitingForSaves = true;
+            let settled;
+            try {
+                settled = await this._savesSettled();
+            } finally {
+                this._waitingForSaves = false;
+            }
+            if (!settled) {
+                Notification.addNotification({
+                    message: await getString('post_grades_unsaved', 'local_unifiedgrader'),
+                    type: 'warning',
+                });
+                return;
+            }
+        }
         const state = this.reactive.state;
         const userid = scope === 'user' ? (state.currentUser?.id || 0) : 0;
         const groupids = scope === 'groups' ? this._groupsInView(state).map((group) => group.id) : [];
         this.reactive.dispatch('setGradesPosted', state.activity.cmid, hidden, scope, userid, groupids);
+    }
+
+    /**
+     * Wait for every grade save to end, and say whether everything is stored.
+     *
+     * The marking panel answers 'unifiedgrader:flushsaves' by saving an unsaved
+     * edit at once and handing back a promise that settles when no save is in
+     * flight or held. The wait is capped, as the student navigator's is, so a
+     * save that never returns cannot block the menu; the edit then counts as
+     * unsaved.
+     *
+     * @return {Promise<boolean>} False while an edit is unsaved or a save waits in SaveQueue.
+     */
+    async _savesSettled() {
+        const detail = {waitfor: []};
+        document.dispatchEvent(new CustomEvent('unifiedgrader:flushsaves', {detail}));
+        if (detail.waitfor.length) {
+            await Promise.race([
+                Promise.all(detail.waitfor),
+                new Promise((resolve) => setTimeout(resolve, 15000)),
+            ]);
+        }
+        return !DirtyTracker.isDirty('grade') && !DirtyTracker.isDirty('feedback') && SaveQueue.getQueueLength() === 0;
     }
 
     /**

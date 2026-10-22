@@ -596,6 +596,7 @@ $string['post_grades_class'] = 'Post the whole class';
 $string['post_grades_class_denied'] = 'You can post grades only for your own groups.';
 $string['post_grades_groups'] = 'Post {$a}';
 $string['post_grades_student'] = 'Post this student';
+$string['post_grades_unsaved'] = 'Nothing was posted: a grade or feedback change is not saved yet. Save it, or resolve the save that failed, then post again.';
 $string['previewpanel'] = 'Submission preview';
 $string['previousstudent'] = 'Previous student';
 $string['privacy:metadata:annotations'] = 'Document annotations stored in the Unified Grader.';

@@ -775,6 +775,99 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * Moodle 5.3's release lock treats a grade, a clear and a "--" reset alike.
+     *
+     * From 5.3 core makes the mark read-only once marking workflow says ready for
+     * release or released, and its own save keeps the previous mark. The grader
+     * lets a teacher who may release change it anyway: a grade goes through core
+     * with the lock lifted for the save, a clear and a reset write the grade
+     * themselves. All three must reach assign_grades and, once released, the
+     * gradebook, and none may move the workflow state.
+     */
+    public function test_release_lock_lets_a_releasing_teacher_grade_clear_and_reset_alike(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        require_once($CFG->libdir . '/gradelib.php');
+        $this->resetAfterTest();
+
+        $states = [ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE, ASSIGN_MARKING_WORKFLOW_STATE_RELEASED];
+        foreach ($states as $state) {
+            $w = $this->create_workflow_scenario($state);
+            $this->setUser($w->scenario->teacher);
+            $adapter = adapter_factory::create($w->scenario->cm->id);
+            [$course, $cm] = get_course_and_cm_from_cmid($w->scenario->cm->id, 'assign');
+            $assignobj = new \assign(\context_module::instance($cm->id), $cm, $course);
+            $this->assertTrue($assignobj->grading_locked($w->student->id), "Precondition: {$state} locks the mark.");
+            $this->assertFalse($assignobj->grading_disabled($w->student->id), "Precondition: {$state} is the teacher's to set.");
+
+            $gradebook = function () use ($course, $w): ?float {
+                $info = grade_get_grades($course->id, 'mod', 'assign', $w->scenario->activity->id, [$w->student->id]);
+                $grade = $info->items[0]->grades[$w->student->id]->grade ?? null;
+                return $grade === null ? null : (float) $grade;
+            };
+            $steps = [
+                'grade' => [fn() => $adapter->save_grade($w->student->id, 70.0, ''), 70.0],
+                'clear' => [fn() => $adapter->save_grade($w->student->id, null, ''), null],
+                'regrade' => [fn() => $adapter->save_grade($w->student->id, 60.0, ''), 60.0],
+                'reset' => [fn() => $adapter->reset_grade_and_submission($w->student->id), null],
+            ];
+            foreach ($steps as $label => [$step, $expected]) {
+                $step();
+                $this->assertEquals(
+                    $expected,
+                    adapter_factory::create($w->scenario->cm->id)->get_grade_data($w->student->id)['grade'],
+                    "{$state}: the {$label} reaches assign_grades."
+                );
+                // Core pushes a mark to the gradebook only once it is released.
+                if ($state === ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
+                    $this->assertEquals($expected, $gradebook(), "{$state}: the {$label} reaches the gradebook.");
+                }
+                $this->assertSame(
+                    $state,
+                    $assignobj->get_user_flags($w->student->id, false)->workflowstate,
+                    "{$state}: the {$label} leaves the workflow state alone."
+                );
+            }
+        }
+    }
+
+    /**
+     * A marker who may not release is refused a released grade, its clear and its reset.
+     *
+     * The control for test_release_lock_lets_a_releasing_teacher_grade_clear_and_reset_alike():
+     * the lock is lifted only for a grader whose workflow states include the
+     * student's, so it never stands in for the workflow refusal.
+     */
+    public function test_release_lock_is_not_lifted_for_a_marker_who_may_not_release(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+
+        $w = $this->create_workflow_scenario(ASSIGN_MARKING_WORKFLOW_STATE_RELEASED);
+        $this->setUser($w->marker);
+        $adapter = adapter_factory::create($w->scenario->cm->id);
+
+        $attempts = [
+            'grade' => fn() => $adapter->save_grade($w->student->id, 70.0, ''),
+            'clear' => fn() => $adapter->save_grade($w->student->id, null, ''),
+            'reset' => fn() => $adapter->reset_grade_and_submission($w->student->id),
+        ];
+        foreach ($attempts as $label => $attempt) {
+            try {
+                $attempt();
+                $this->fail("The {$label} of a released grade should have been refused to a marker.");
+            } catch (\moodle_exception $e) {
+                $this->assertSame('error_grade_blocked_by_workflow', $e->errorcode, $label);
+            }
+            $this->assertEquals(
+                50.0,
+                adapter_factory::create($w->scenario->cm->id)->get_grade_data($w->student->id)['grade'],
+                "The refused {$label} must leave the released mark in place."
+            );
+        }
+    }
+
+    /**
      * Attach a marking guide with one criterion out of 10 to the scenario's assignment.
      *
      * @param \stdClass $scenario Scenario from the plugin generator.
