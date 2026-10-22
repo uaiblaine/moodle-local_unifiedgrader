@@ -77,6 +77,63 @@ final class service_test extends \advanced_testcase {
     }
 
     /**
+     * Under marking workflow the walk is keyed to the mark the post released.
+     *
+     * Releasing a ready-for-release student pushes the mark to the gradebook,
+     * which rewrites the cell's timemodified. The walk stores that value as the
+     * mark it belongs to, so the push has to come before the walk is opened, or
+     * the next post of the same mark no longer finds the walk and starts another.
+     */
+    public function test_marking_workflow_post_keys_the_walk_to_the_released_mark(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+        $this->enable_friction();
+
+        $plugingen = $this->getDataGenerator()->get_plugin_generator('local_unifiedgrader');
+        $scenario = $plugingen->create_grading_scenario('assign', [
+            'studentcount' => 1,
+            'modparams' => ['markingworkflow' => 1],
+        ]);
+        $adapter = adapter_factory::create($scenario->cm->id);
+        $student = $scenario->students[0];
+        $this->setUser($student);
+        $plugingen->create_assign_submission($scenario->activity, $student->id);
+        $this->setUser($scenario->teacher);
+        $adapter->save_grade($student->id, 80.0, '<p>Marked.</p>');
+        $DB->set_field('assign_user_flags', 'workflowstate', ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE, [
+            'assignment' => $scenario->activity->id,
+            'userid' => $student->id,
+        ]);
+        $itemid = $adapter->get_grade_item()->id;
+        // An older stamp than the post can write, so a stale key cannot match by luck.
+        $DB->set_field('grade_grades', 'timemodified', 1000, ['itemid' => $itemid, 'userid' => $student->id]);
+
+        $adapter->set_grades_posted(0, [$student->id]);
+
+        $cellstamp = (int) $DB->get_field('grade_grades', 'timemodified', ['itemid' => $itemid, 'userid' => $student->id]);
+        $this->assertNotSame(1000, $cellstamp, 'Precondition: the post pushed the mark.');
+        $walk = $DB->get_record('local_unifiedgrader_friction', [
+            'itemid' => $itemid,
+            'userid' => $student->id,
+            'state' => service::STATE_PENDING,
+        ], '*', MUST_EXIST);
+        $this->assertSame($cellstamp, (int) $walk->gradetimemodified);
+
+        $adapter->set_grades_posted(0, [$student->id]);
+        $this->assertSame(
+            [(int) $walk->id],
+            array_map('intval', $DB->get_fieldset_select(
+                'local_unifiedgrader_friction',
+                'id',
+                'itemid = ? AND userid = ?',
+                [$itemid, $student->id],
+            )),
+            'Posting the same mark again keeps the same walk.'
+        );
+    }
+
+    /**
      * An activity can force the walk off, or on, against the site default.
      */
     public function test_activity_mode_overrides_the_site(): void {

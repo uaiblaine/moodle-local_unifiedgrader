@@ -248,6 +248,12 @@ export default class extends BaseComponent {
         if (this._waitingForSaves) {
             return;
         }
+        // The students the teacher confirmed, read before the wait: switching
+        // student during it must not post the one switched to.
+        const state = this.reactive.state;
+        const cmid = state.activity.cmid;
+        const userid = scope === 'user' ? (state.currentUser?.id || 0) : 0;
+        const groupids = scope === 'groups' ? this._groupsInView(state).map((group) => group.id) : [];
         if (hidden !== 1) {
             this._waitingForSaves = true;
             let settled;
@@ -264,10 +270,7 @@ export default class extends BaseComponent {
                 return;
             }
         }
-        const state = this.reactive.state;
-        const userid = scope === 'user' ? (state.currentUser?.id || 0) : 0;
-        const groupids = scope === 'groups' ? this._groupsInView(state).map((group) => group.id) : [];
-        this.reactive.dispatch('setGradesPosted', state.activity.cmid, hidden, scope, userid, groupids);
+        this.reactive.dispatch('setGradesPosted', cmid, hidden, scope, userid, groupids);
     }
 
     /**

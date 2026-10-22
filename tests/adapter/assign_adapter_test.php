@@ -861,6 +861,44 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * Posting leaves the assignment grade alone for a student whose gradebook cell is locked.
+     *
+     * Core's own release skips such a student. The push would rewrite assign_grades
+     * (and could open a new attempt) for a mark the gradebook refuses anyway.
+     */
+    public function test_posting_skips_the_push_for_a_locked_gradebook_cell(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        $this->resetAfterTest();
+
+        $w = $this->create_workflow_scenario(ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE);
+        $this->setUser($w->scenario->teacher);
+        $adapter = adapter_factory::create($w->scenario->cm->id);
+        $item = $adapter->get_grade_item();
+        $cell = \grade_grade::fetch(['itemid' => $item->id, 'userid' => $w->student->id]);
+        if (!$cell) {
+            $cell = new \grade_grade(['itemid' => $item->id, 'userid' => $w->student->id], false);
+            $cell->insert();
+        }
+        $cell->locked = time();
+        $cell->update();
+        $this->assertTrue($item->is_locked($w->student->id), 'Precondition: the gradebook cell is locked.');
+        $params = ['assignment' => $w->scenario->activity->id, 'userid' => $w->student->id];
+        $DB->set_field('assign_grades', 'timemodified', 1000, $params);
+
+        $adapter->set_grades_posted(0, [$w->student->id]);
+
+        [$course, $cm] = get_course_and_cm_from_cmid($w->scenario->cm->id, 'assign');
+        $assignobj = new \assign(\context_module::instance($cm->id), $cm, $course);
+        $this->assertSame(
+            ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
+            $assignobj->get_user_flags($w->student->id, false)->workflowstate,
+            'Precondition: the post released the student.'
+        );
+        $this->assertSame(1000, (int) $DB->get_field('assign_grades', 'timemodified', $params));
+    }
+
+    /**
      * A marker who may not release is refused a released grade, its clear and its reset.
      *
      * The control for test_release_lock_lets_a_releasing_teacher_grade_clear_and_reset_alike():

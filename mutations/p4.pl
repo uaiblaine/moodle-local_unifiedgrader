@@ -1,0 +1,1 @@
+s/        if \(\$this->assign->grading_disabled\(\$userid\)\) \{\n            return;\n        \}\n        \$grade = \$this->assign->get_user_grade\(\$userid, false\);/        \$grade = \$this->assign->get_user_grade(\$userid, false);/ or die "p4 did not match";

@@ -1510,8 +1510,11 @@ class assign_adapter extends base_adapter {
      * @return array{posted:bool,partial:bool,hidden:int,postedcount:int,total:int,lifted:bool}
      */
     public function set_grades_posted(int $hidden, array $userids = []): array {
-        $status = parent::set_grades_posted($hidden, $userids);
+        // Workflow first: releasing a student pushes their mark to the gradebook
+        // (push_released_grade()), which rewrites the cell's timemodified, and the
+        // Friction Feedback walk the parent opens is keyed to that value.
         $this->apply_workflow($hidden, $userids);
+        $status = parent::set_grades_posted($hidden, $userids);
         $this->apply_mailed($hidden, $userids, !empty($status['lifted']));
         // The assignment cron mails a visible item and ignores the cell. A held
         // mark stays unmailed, including when the fail-safe later opens the cell.
@@ -1582,6 +1585,12 @@ class assign_adapter extends base_adapter {
      * @param int $userid
      */
     private function push_released_grade(int $userid): void {
+        // Core's release skips these students too: a locked or overridden cell
+        // keeps its value, and update_grade() would still rewrite assign_grades
+        // and may open a new attempt.
+        if ($this->assign->grading_disabled($userid)) {
+            return;
+        }
         $grade = $this->assign->get_user_grade($userid, false);
         if (!$grade) {
             return;
