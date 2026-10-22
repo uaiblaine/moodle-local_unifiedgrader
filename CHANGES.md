@@ -8,10 +8,15 @@
   waits offline for a retry), nothing is posted and the grader says so, instead of releasing the mark the
   server still holds. A refused edit the teacher has not changed is not sent again. Hiding grades is
   unchanged.
-- **Moodle 5.3's release lock is pinned for grades, clears and resets.** Once marking workflow says ready for
+- **A released mark reaches the gradebook again.** Core keeps an assignment mark out of the gradebook until
+  marking workflow says released, and pushes it when its own release action runs. Two paths set the state
+  without that push: a grade saved for a released student on Moodle 5.3 (the save lifts the release lock by
+  moving the student to in marking, which took the mark out of the gradebook, and put released back
+  without pushing it), and posting a student held at ready for release. Both now push the mark, as core does.
+- **Moodle 5.3's release lock treats grades, clears and resets alike.** Once marking workflow says ready for
   release or released, a teacher who may release can still change the mark: a grade, a "-" clear and a
   "--" reset all reach the assignment and, once released, the gradebook, and none moves the workflow state.
-  A marker who may not release is refused all three. Tests only; no code change was needed.
+  A marker who may not release is refused all three.
 
 ## v3.0.1+uai.1 (2026102200)
 

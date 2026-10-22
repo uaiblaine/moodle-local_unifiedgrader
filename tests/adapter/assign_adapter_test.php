@@ -832,6 +832,35 @@ final class assign_adapter_test extends \advanced_testcase {
     }
 
     /**
+     * Posting a student held at ready for release puts the mark in the gradebook.
+     *
+     * Core leaves the gradebook cell empty until marking workflow says released.
+     * The post moves the state with update_user_flags(), which pushes nothing by
+     * itself, so the released student had no mark in the gradebook.
+     */
+    public function test_posting_a_ready_for_release_student_puts_the_mark_in_the_gradebook(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/assign/locallib.php');
+        require_once($CFG->libdir . '/gradelib.php');
+        $this->resetAfterTest();
+
+        $w = $this->create_workflow_scenario(ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE);
+        $this->setUser($w->scenario->teacher);
+        $adapter = adapter_factory::create($w->scenario->cm->id);
+        $course = $w->scenario->course;
+        $gradebook = function () use ($course, $w): ?float {
+            $info = grade_get_grades($course->id, 'mod', 'assign', $w->scenario->activity->id, [$w->student->id]);
+            $grade = $info->items[0]->grades[$w->student->id]->grade ?? null;
+            return $grade === null ? null : (float) $grade;
+        };
+        $this->assertNull($gradebook(), 'Precondition: ready for release keeps the mark out of the gradebook.');
+
+        $adapter->set_grades_posted(0, [$w->student->id]);
+
+        $this->assertEquals(50.0, $gradebook());
+    }
+
+    /**
      * A marker who may not release is refused a released grade, its clear and its reset.
      *
      * The control for test_release_lock_lets_a_releasing_teacher_grade_clear_and_reset_alike():
