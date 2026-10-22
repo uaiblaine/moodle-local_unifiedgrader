@@ -27,7 +27,7 @@ use local_unifiedgrader\segment_comment_manager;
  * Core's contract for a read-only session is the one write_close() checks
  * (lib/classes/session/manager.php, the array_session_diff() of $SESSION taken at session start
  * and at close): no $SESSION key added, removed or changed. That is what is asserted here around
- * every call of the sixteen reads the grader and the feedback page make, the way the browser
+ * every call of the eighteen reads the grader and the feedback page make, the way the browser
  * makes them. $USER is not compared, as core does not compare it.
  *
  * The services already call \core\session\manager::write_close() themselves, but only after the
@@ -216,7 +216,7 @@ final class readonly_session_test extends \advanced_testcase {
         sort($exercised);
 
         $this->assertSame('read', $functions[self::TRANSLATION_READ]['type']);
-        $this->assertCount(16, $declared);
+        $this->assertCount(18, $declared);
         $this->assertSame($exercised, $declared);
     }
 

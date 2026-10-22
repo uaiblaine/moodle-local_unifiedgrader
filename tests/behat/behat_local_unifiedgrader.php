@@ -1742,13 +1742,18 @@ class behat_local_unifiedgrader extends behat_base {
     /**
      * Reload the grader while it holds unsaved work, as a closed tab or a crash would leave it.
      *
-     * Removes the panel's leave-page warning first: WebDriver cannot answer the
-     * native dialogue it raises. Nothing is saved; the offline copy stays.
+     * Silences the panel's leave-page warning first: WebDriver cannot answer the
+     * native dialogue it raises. dirty_tracker no longer exports a way to remove
+     * its handler, so a capturing listener added here stops the event before it:
+     * on the window itself capturing listeners run first. Nothing is saved; the
+     * offline copy stays.
      *
      * @When /^I reload the Unified Grader without saving$/
      */
     public function i_reload_the_unified_grader_without_saving(): void {
-        $this->execute_script("require('local_unifiedgrader/dirty_tracker').uninstall();");
+        $this->execute_script(
+            "window.addEventListener('beforeunload', function(e) { e.stopImmediatePropagation(); }, true);"
+        );
         $this->execute('behat_general::reload');
     }
 
