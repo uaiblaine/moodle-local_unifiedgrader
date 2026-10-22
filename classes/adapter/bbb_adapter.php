@@ -140,6 +140,9 @@ class bbb_adapter extends base_adapter {
         global $DB, $PAGE;
 
         $groupids = $this->get_group_ids($filters);
+        if ($groupids === null) {
+            return [];
+        }
         $bbbid = (int) $this->bbb->id;
 
         // Get enrolled users who can join meetings (active enrolments only).
@@ -174,6 +177,8 @@ class bbb_adapter extends base_adapter {
                 }
             }
         }
+
+        $this->attach_user_contextids($enrolledusers);
 
         $result = [];
         foreach ($enrolledusers as $user) {
@@ -251,7 +256,7 @@ class bbb_adapter extends base_adapter {
             return $sortdir === 'desc' ? -$cmp : $cmp;
         });
 
-        return $result;
+        return $this->attach_grade_hidden($result);
     }
 
     /**
@@ -921,8 +926,8 @@ class bbb_adapter extends base_adapter {
     /**
      * Check whether the BBB grade is released and visible to the student.
      *
-     * Released means a final grade exists and neither the grade item nor the
-     * student's own grade is hidden in the gradebook: a teacher can hide one
+     * Released means a final grade exists and the gradebook does not withhold
+     * it ({@see base_adapter::withheld_blocks_release()}): a teacher can hide one
      * student's grade, or hide it until a date, while the item stays visible.
      *
      * @param int $userid
@@ -933,11 +938,11 @@ class bbb_adapter extends base_adapter {
         if (!$gradeitem) {
             return false;
         }
-        if ($gradeitem->is_hidden()) {
+        if ($this->withheld_blocks_release($userid)) {
             return false;
         }
         $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
-        return $gradegrade && $gradegrade->finalgrade !== null && !$gradegrade->is_hidden();
+        return $gradegrade && $gradegrade->finalgrade !== null;
     }
 
     /**

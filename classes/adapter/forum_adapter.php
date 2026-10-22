@@ -39,6 +39,9 @@ namespace local_unifiedgrader\adapter;
 
 defined('MOODLE_INTERNAL') || die();
 
+use local_unifiedgrader\penalty\activity_settings;
+use local_unifiedgrader\penalty\compat;
+use local_unifiedgrader\penalty\gradebook_writer;
 use local_unifiedgrader\submission_comment_manager;
 
 global $CFG;
@@ -138,6 +141,22 @@ class forum_adapter extends base_adapter {
     }
 
     /**
+     * Whether penalties apply to this forum's ratings grade.
+     *
+     * Only on Moodle 5.3, where Unified Grader owns late penalties, and only for
+     * a forum graded by post ratings whose ratings are points combined by
+     * average or sum (see forum_rating_helper::penalties_apply()). Whole-forum
+     * grading has its own rules and is not decided here.
+     *
+     * @return bool
+     */
+    public function rating_penalties_apply(): bool {
+        return compat::unified()
+            && $this->is_rating_mode()
+            && forum_rating_helper::penalties_apply($this->forumrecord);
+    }
+
+    /**
      * The rating helper, built on first use.
      *
      * @return forum_rating_helper
@@ -225,6 +244,9 @@ class forum_adapter extends base_adapter {
             'gradingmode' => $this->gradingmode,
             'ratingaggregatelabel' => $aggregatelabel,
             'ratingaggregatemethod' => $aggregatemethod,
+            // Whether a rated forum takes penalties, so the client need not work
+            // out the rule itself. Always false outside rating mode.
+            'ratingpenaltieseligible' => $this->rating_penalties_apply(),
             'canrate' => $canrate,
             'teamsubmission' => false,
             'blindmarking' => false,
@@ -232,7 +254,7 @@ class forum_adapter extends base_adapter {
             'hasduedateplugin' => false,
             'canmanageextensions' => has_capability('local/unifiedgrader:grade', $this->context),
             'maxattempts' => 1,
-            'gradepenaltyenabled' => false,
+            'gradepenaltyenabled' => compat::unified() && activity_settings::is_enabled($this->cm),
         ];
     }
 
@@ -246,6 +268,9 @@ class forum_adapter extends base_adapter {
         global $DB, $PAGE;
 
         $groupids = $this->get_group_ids($filters);
+        if ($groupids === null) {
+            return [];
+        }
         $forumid = $this->forum->get_id();
 
         // Get enrolled users who can view discussions (active enrolments only).
@@ -314,6 +339,8 @@ class forum_adapter extends base_adapter {
                 }
             }
         }
+
+        $this->attach_user_contextids($enrolledusers);
 
         $result = [];
         foreach ($enrolledusers as $user) {
@@ -401,7 +428,7 @@ class forum_adapter extends base_adapter {
             return $sortdir === 'desc' ? -$cmp : $cmp;
         });
 
-        return $result;
+        return $this->attach_grade_hidden($result);
     }
 
     /**
@@ -935,18 +962,11 @@ class forum_adapter extends base_adapter {
         }
 
         // Get attachment files for these posts.
-        $fs = get_file_storage();
+        $filesbypost = $this->get_area_files_by_item('mod_forum', 'attachment', $postids);
         $converter = new \core_files\converter();
         $result = [];
         foreach ($postids as $postid) {
-            $files = $fs->get_area_files(
-                $this->context->id,
-                'mod_forum',
-                'attachment',
-                $postid,
-                'filename',
-                false,
-            );
+            $files = $filesbypost[(int) $postid] ?? [];
             foreach ($files as $file) {
                 $downloadurl = \moodle_url::make_pluginfile_url(
                     $file->get_contextid(),
@@ -1055,7 +1075,7 @@ class forum_adapter extends base_adapter {
         }
 
         $results = [];
-        $fs = get_file_storage();
+        $filesbypost = $this->get_area_files_by_item('mod_forum', 'attachment', array_keys($posts));
 
         // Post-body plagiarism is already surfaced inline in the preview
         // panel via per-post plagiarism shields rendered alongside the
@@ -1063,14 +1083,7 @@ class forum_adapter extends base_adapter {
         // listing in the marking panel. Attachments don't have an
         // equivalent inline affordance, so they get listed here.
         foreach ($posts as $post) {
-            $files = $fs->get_area_files(
-                $this->context->id,
-                'mod_forum',
-                'attachment',
-                $post->id,
-                'filename',
-                false,
-            );
+            $files = $filesbypost[(int) $post->id] ?? [];
             foreach ($files as $file) {
                 // A recording / image / archive can never produce a plagiarism
                 // result — show a neutral note rather than the vendor's red
@@ -1160,21 +1173,9 @@ class forum_adapter extends base_adapter {
             }
         }
 
-        // Check neither the gradebook item nor the student's own grade is hidden:
-        // the teacher can hide one student's grade, or hide it until a date,
-        // while the item stays visible.
-        $gradeitem = $this->fetch_grade_item();
-        if ($gradeitem && $gradeitem->is_hidden()) {
-            return false;
-        }
-        if ($gradeitem) {
-            $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $userid]);
-            if ($gradegrade && $gradegrade->is_hidden()) {
-                return false;
-            }
-        }
-
-        return true;
+        // The gradebook cell (and the item behind it) must be visible.
+        // A pending feedback walk hides the cell and still opens this page.
+        return !$this->withheld_blocks_release($userid);
     }
 
     /**
@@ -1888,10 +1889,16 @@ SCRIPT;
         require_once($CFG->dirroot . '/mod/forum/lib.php');
 
         // In rating mode the gradebook value belongs to core, recomputed from
-        // the {rating} rows on every change. Pushing a penalised figure here
-        // would be overwritten by the next rating — or, worse, stick as an
-        // override and silently diverge from the ratings it claims to reflect.
+        // the {rating} rows on every change, so there is no raw mark to push.
+        // Where penalties apply, the deduction is recorded beside whatever core
+        // computed; core resets it on the next rating and the user_graded
+        // observer puts it back. Elsewhere (and before Moodle 5.3) a rated
+        // forum is left alone, with any deduction a settings change left behind
+        // cleared by the same call.
         if ($this->is_rating_mode()) {
+            if (compat::unified()) {
+                $this->apply_gradebook_deduction($userid);
+            }
             return;
         }
 
@@ -1913,6 +1920,23 @@ SCRIPT;
         }
 
         $rawgrade = (float) $graderecord->grade;
+
+        // Moodle 5.3: push the mark as given and record the deduction beside it
+        // in the gradebook. A course still frozen on the pre-5.3 penalty maths
+        // falls through to the reduced push below.
+        if (compat::unified()) {
+            forum_grade_item_update($this->forumrecord, null, [
+                $userid => (object) [
+                    'userid' => $userid,
+                    'rawgrade' => $rawgrade,
+                    'datesubmitted' => 0,
+                    'dategraded' => (int) $graderecord->timemodified,
+                ],
+            ]);
+            if ($this->apply_gradebook_deduction($userid) !== gradebook_writer::LEGACY) {
+                return;
+            }
+        }
 
         // Calculate penalty deduction. A negative grade_for_forum is a scale id,
         // not a maximum — deducting percentage points from a scale index is
@@ -2116,24 +2140,68 @@ SCRIPT;
     }
 
     /**
+     * The maximum grade penalty percentages are taken of.
+     *
+     * The whole-forum maximum, or for a rated forum that takes penalties the
+     * points maximum of its ratings. 0 for a rated forum that does not, and for
+     * a scale (a negative grade_for_forum is a scale id), so no deduction is
+     * ever worked out there.
+     *
+     * @return float
+     */
+    protected function get_penalty_max_grade(): float {
+        if ($this->is_rating_mode()) {
+            return $this->rating_penalties_apply() ? (float) $this->forumrecord->scale : 0.0;
+        }
+        return max(0.0, (float) $this->forum->get_grade_for_forum());
+    }
+
+    /**
+     * When the student's work counts as submitted: their first post.
+     *
+     * A student who posted on time but added follow-up posts after the due date
+     * is not late.
+     *
+     * @param int $userid Student user ID.
+     * @return int Timestamp, or 0 if they have not posted.
+     */
+    public function get_late_reference_time(int $userid): int {
+        global $DB;
+
+        $firstpost = $DB->get_field_sql(
+            "SELECT MIN(p.created)
+               FROM {forum_posts} p
+               JOIN {forum_discussions} d ON d.id = p.discussion
+              WHERE d.forum = :forumid AND p.userid = :userid AND p.deleted = 0",
+            ['forumid' => $this->forum->get_id(), 'userid' => $userid],
+        );
+        return (int) $firstpost;
+    }
+
+    /**
      * Calculate the late penalty for a student based on Moodle's penalty rules.
      *
      * Uses the gradepenalty_duedate plugin's configured rules (module → course → system
      * context hierarchy) to determine the penalty percentage for late forum submissions.
      *
      * @param int $userid Student user ID.
+     * @param int|null $duedate A due date to test instead of the student's effective one (a preview).
      * @return array|null Array with 'percentage' (int) and 'dayslate' (int), or null if not late/not applicable.
      */
-    public function calculate_late_penalty(int $userid): ?array {
-        global $DB;
+    public function calculate_late_penalty(int $userid, ?int $duedate = null): ?array {
+        // From Moodle 5.3 each forum has its own penalty switch.
+        if (compat::unified() && !activity_settings::is_enabled($this->cm)) {
+            return null;
+        }
 
         // No penalty if gradepenalty_duedate plugin is not installed.
         if (!class_exists('\gradepenalty_duedate\penalty_calculator')) {
             return null;
         }
 
-        // Use effective due date (accounts for extensions).
-        $duedate = $this->get_effective_duedate($userid);
+        // Use effective due date (accounts for extensions), unless the caller
+        // is previewing another one.
+        $duedate = $duedate ?? $this->get_effective_duedate($userid);
         if ($duedate <= 0) {
             return null;
         }
@@ -2143,22 +2211,17 @@ SCRIPT;
             return null;
         }
 
-        // Use the first post time to determine lateness — a student who posted
-        // on time but added follow-up posts after the due date is NOT late.
-        $forumid = $this->forum->get_id();
-        $firstpost = $DB->get_field_sql(
-            "SELECT MIN(p.created)
-               FROM {forum_posts} p
-               JOIN {forum_discussions} d ON d.id = p.discussion
-              WHERE d.forum = :forumid AND p.userid = :userid AND p.deleted = 0",
-            ['forumid' => $forumid, 'userid' => $userid],
-        );
-
-        if (empty($firstpost)) {
+        // A forum graded by post ratings takes a penalty only when its ratings
+        // are points combined by average or sum. Say so here, so the Dates &
+        // extensions dialogue does not predict a penalty that will never be taken.
+        if ($this->is_rating_mode() && !$this->rating_penalties_apply()) {
             return null;
         }
 
-        $submissiontime = (int) $firstpost;
+        $submissiontime = $this->get_late_reference_time($userid);
+        if ($submissiontime <= 0) {
+            return null;
+        }
 
         // Not late.
         if ($submissiontime <= $duedate) {
@@ -2260,6 +2323,9 @@ SCRIPT;
                 'timemodified' => $now,
             ]);
         }
+
+        // An extension past the forum's cut-off lets the student post until it ends.
+        \local_unifiedgrader\dates\forum_cutoff_access::sync((int) $this->cm->id, $userid);
     }
 
     /**
@@ -2274,5 +2340,8 @@ SCRIPT;
             'cmid' => (int) $this->cm->id,
             'userid' => $userid,
         ]);
+
+        // With the extension gone, so is any access after the cut-off it gave.
+        \local_unifiedgrader\dates\forum_cutoff_access::sync((int) $this->cm->id, $userid);
     }
 }

@@ -49,6 +49,15 @@ class library_csv {
     private const MAX_TAG_LENGTH = 50;
 
     /**
+     * @var string Escape character for fputcsv() and fgetcsv().
+     *
+     * PHP's long-standing default, passed explicitly because PHP 8.4
+     * deprecates leaving it out. Kept so files exported earlier read back
+     * the same.
+     */
+    private const CSV_ESCAPE = '\\';
+
+    /**
      * Export one owner's library (optionally restricted to one course code).
      *
      * @param int $userid The owner.
@@ -137,7 +146,7 @@ class library_csv {
             : ['coursecode', 'shared', 'tags', 'content'];
         // The escape character is passed explicitly, here and in import(): PHP 8.4
         // deprecates relying on its default, and core's csvlib passes the same value.
-        fputcsv($fh, $header, escape: '\\');
+        fputcsv($fh, $header, escape: self::CSV_ESCAPE);
 
         foreach ($records as $r) {
             $tags = self::escape_cell(implode(self::TAG_SEPARATOR, $tagnames[(int) $r->id] ?? []));
@@ -145,9 +154,9 @@ class library_csv {
             $content = self::escape_cell((string) $r->content);
             if ($includeowner) {
                 $ownername = self::escape_cell(isset($r->firstname) ? trim($r->firstname . ' ' . $r->lastname) : '');
-                fputcsv($fh, [$r->userid, $ownername, $coursecode, $r->shared, $tags, $content], escape: '\\');
+                fputcsv($fh, [$r->userid, $ownername, $coursecode, $r->shared, $tags, $content], escape: self::CSV_ESCAPE);
             } else {
-                fputcsv($fh, [$coursecode, $r->shared, $tags, $content], escape: '\\');
+                fputcsv($fh, [$coursecode, $r->shared, $tags, $content], escape: self::CSV_ESCAPE);
             }
         }
 
@@ -264,7 +273,7 @@ class library_csv {
         fwrite($fh, $csvcontent);
         rewind($fh);
 
-        $header = fgetcsv($fh, escape: '\\');
+        $header = fgetcsv($fh, escape: self::CSV_ESCAPE);
         if ($header === false) {
             fclose($fh);
             return ['imported' => 0, 'skipped' => 0, 'errors' => [get_string('clibcsv_empty_file', 'local_unifiedgrader')]];
@@ -290,7 +299,7 @@ class library_csv {
         $now = time();
         $rownum = 1;
 
-        while (($row = fgetcsv($fh, escape: '\\')) !== false) {
+        while (($row = fgetcsv($fh, escape: self::CSV_ESCAPE)) !== false) {
             $rownum++;
 
             if (count($row) === 1 && trim((string) $row[0]) === '') {

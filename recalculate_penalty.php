@@ -34,11 +34,27 @@ require_once($CFG->dirroot . '/mod/assign/lib.php');
 $cmid = required_param('cmid', PARAM_INT);
 $userid = required_param('userid', PARAM_INT);
 
+// From Moodle 5.3 Unified Grader owns late penalties for every type it grades.
+if (\local_unifiedgrader\penalty\compat::unified()) {
+    [$course, $cm] = get_course_and_cm_from_cmid($cmid);
+    require_login($course, false, $cm);
+    require_capability('local/unifiedgrader:grade', context_module::instance($cm->id));
+    require_sesskey();
+    \local_unifiedgrader\access::require_student_access(context_module::instance($cm->id), $userid);
+
+    \local_unifiedgrader\penalty\service::resync($cmid, $userid);
+
+    header('Content-Type: application/json');
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 [$course, $cm] = get_course_and_cm_from_cmid($cmid, 'assign');
 require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('local/unifiedgrader:grade', $context);
 require_sesskey();
+\local_unifiedgrader\access::require_student_access($context, $userid);
 
 $assign = new assign($context, $cm, $course);
 $instance = clone $assign->get_instance();

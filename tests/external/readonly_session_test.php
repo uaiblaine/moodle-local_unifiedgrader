@@ -44,7 +44,6 @@ use local_unifiedgrader\segment_comment_manager;
  * @category   test
  * @copyright  2026 Anderson Blaine
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- * @covers \local_unifiedgrader\external\get_activity_info
  * @covers \local_unifiedgrader\external\get_participants
  * @covers \local_unifiedgrader\external\get_submission_data
  * @covers \local_unifiedgrader\external\get_grade_data
@@ -60,6 +59,9 @@ use local_unifiedgrader\segment_comment_manager;
  * @covers \local_unifiedgrader\external\get_segment_comments
  * @covers \local_unifiedgrader\external\get_post_ratings
  * @covers \local_unifiedgrader\external\get_post_context
+ * @covers \local_unifiedgrader\external\get_student_dates
+ * @covers \local_unifiedgrader\external\preview_student_dates
+ * @covers \local_unifiedgrader\external\get_proctoring
  */
 final class readonly_session_test extends \advanced_testcase {
     /**
@@ -88,7 +90,6 @@ final class readonly_session_test extends \advanced_testcase {
      */
     private static function read_only_calls(\stdClass $fx): array {
         return [
-            'local_unifiedgrader_get_activity_info' => ['user' => $fx->teacher, 'args' => ['cmid' => $fx->cmid]],
             'local_unifiedgrader_get_participants' => ['user' => $fx->teacher, 'args' => ['cmid' => $fx->cmid]],
             'local_unifiedgrader_get_submission_data' => [
                 'user' => $fx->teacher,
@@ -137,6 +138,15 @@ final class readonly_session_test extends \advanced_testcase {
                 'user' => $fx->forumteacher,
                 'args' => ['cmid' => $fx->forumcmid, 'userid' => $fx->forumstudentid],
             ],
+            'local_unifiedgrader_get_student_dates' => [
+                'user' => $fx->teacher,
+                'args' => ['cmid' => $fx->cmid, 'userid' => $fx->studentid],
+            ],
+            'local_unifiedgrader_preview_student_dates' => [
+                'user' => $fx->teacher,
+                'args' => ['cmid' => $fx->cmid, 'userid' => $fx->studentid, 'extension' => ''],
+            ],
+            'local_unifiedgrader_get_proctoring' => ['user' => $fx->teacher, 'args' => ['cmid' => $fx->cmid]],
         ];
     }
 
@@ -380,7 +390,6 @@ final class readonly_session_test extends \advanced_testcase {
             // The control: the call found the fixture's data, so its whole path ran.
             $data = $result['data'];
             match ($name) {
-                'local_unifiedgrader_get_activity_info' => $this->assertSame($fx->cmid, (int) $data['id'], $name),
                 'local_unifiedgrader_get_participants' => $this->assertContains(
                     $fx->studentid,
                     array_map('intval', array_column($data, 'id')),
@@ -436,6 +445,11 @@ final class readonly_session_test extends \advanced_testcase {
                     array_map('intval', array_column($data['discussions'][0]['posts'] ?? [], 'id')),
                     $name
                 ),
+                'local_unifiedgrader_get_student_dates' => $this->assertSame($fx->studentid, (int) $data['userid'], $name),
+                'local_unifiedgrader_preview_student_dates' => $this->assertNotSame('', $data['title'], $name),
+                // No proctoring service is configured, so the call ends at its "no service"
+                // answer, after the access checks: those are what could touch the session.
+                'local_unifiedgrader_get_proctoring' => $this->assertSame('none', $data['state'], $name),
             };
             $this->assertSame([], self::changed_keys($before, $after), "$name changed \$SESSION");
         }

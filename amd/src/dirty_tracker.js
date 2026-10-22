@@ -114,14 +114,6 @@ export const setSnapshot = (type, value) => {
 };
 
 /**
- * Get the stored snapshot for a data type.
- *
- * @param {string} type Data type key.
- * @return {*} The stored snapshot value.
- */
-export const getSnapshot = (type) => _snapshots[type];
-
-/**
  * Compare a current value against the stored snapshot.
  *
  * @param {string} type Data type key.
@@ -148,18 +140,6 @@ export const onDirtyChange = (callback) => {
 };
 
 /**
- * Reset all dirty flags and snapshots. Used on student switch.
- */
-export const resetAll = () => {
-    for (const key of Object.keys(_dirtyFlags)) {
-        _dirtyFlags[key] = false;
-    }
-    _snapshots.grade = null;
-    _snapshots.feedback = '';
-    _notifyListeners();
-};
-
-/**
  * Install the global beforeunload handler.
  * Shows the browser's native "Leave site?" dialog when any data type is dirty,
  * or while SaveQueue holds a save waiting for its retry: the queue lives in
@@ -176,14 +156,4 @@ export const install = () => {
         }
     };
     window.addEventListener('beforeunload', _beforeUnloadHandler);
-};
-
-/**
- * Remove the global beforeunload handler.
- */
-export const uninstall = () => {
-    if (_beforeUnloadHandler) {
-        window.removeEventListener('beforeunload', _beforeUnloadHandler);
-        _beforeUnloadHandler = null;
-    }
 };

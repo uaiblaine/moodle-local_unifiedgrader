@@ -44,6 +44,12 @@ class submission_comment_manager {
     public static function get_comments(int $cmid, int $userid): array {
         global $DB;
 
+        // An assignment's thread also holds comments made in core's
+        // submissions list or grader; bring in any not copied yet.
+        if (assign_comment_sync::is_assign($cmid)) {
+            assign_comment_sync::import_missing($cmid, $userid);
+        }
+
         $sql = "SELECT sc.*, u.firstname, u.lastname, u.firstnamephonetic,
                        u.lastnamephonetic, u.middlename, u.alternatename
                   FROM {" . self::TABLE . "} sc
@@ -64,12 +70,14 @@ class submission_comment_manager {
      * @param int $userid Student user ID.
      * @param int $authorid Author user ID.
      * @param string $content Comment content.
+     * @param array $from For a comment copied from core: corecommentid and timecreated.
+     *     Without them the comment is new, and on an assignment it is also written to core.
      * @return \stdClass The new comment record.
      */
-    public static function add_comment(int $cmid, int $userid, int $authorid, string $content): \stdClass {
+    public static function add_comment(int $cmid, int $userid, int $authorid, string $content, array $from = []): \stdClass {
         global $DB;
 
-        $now = time();
+        $now = (int) ($from['timecreated'] ?? time());
         $record = (object) [
             'cmid' => $cmid,
             'userid' => $userid,
@@ -77,8 +85,13 @@ class submission_comment_manager {
             'content' => $content,
             'timecreated' => $now,
             'timemodified' => $now,
+            'corecommentid' => isset($from['corecommentid']) ? (int) $from['corecommentid'] : null,
         ];
         $record->id = $DB->insert_record(self::TABLE, $record);
+
+        if ($record->corecommentid === null) {
+            assign_comment_sync::push($record);
+        }
 
         // Let local_nida translate the new comment bidirectionally. Guarded by
         // class_exists so this degrades gracefully when local_nida is absent, and
@@ -105,6 +118,12 @@ class submission_comment_manager {
      */
     public static function delete_comment(int $commentid): bool {
         global $DB;
+        $record = $DB->get_record(self::TABLE, ['id' => $commentid]);
+        if (!$record) {
+            return false;
+        }
+        // Removes the core comment it is linked to, and the other copies of it.
+        assign_comment_sync::delete_linked($record);
         return $DB->delete_records(self::TABLE, ['id' => $commentid]);
     }
 
@@ -132,46 +151,5 @@ class submission_comment_manager {
     public static function get_comment(int $commentid) {
         global $DB;
         return $DB->get_record(self::TABLE, ['id' => $commentid]);
-    }
-
-    /**
-     * Delete all comments for a given activity (cleanup).
-     *
-     * @param int $cmid Course module ID.
-     */
-    public static function delete_all_for_context(int $cmid): void {
-        global $DB;
-        $DB->delete_records(self::TABLE, ['cmid' => $cmid]);
-    }
-
-    /**
-     * Get all comments authored by a specific user (for privacy provider).
-     *
-     * @param int $authorid Author user ID.
-     * @return array List of comment records.
-     */
-    public static function get_comments_by_author(int $authorid): array {
-        global $DB;
-        return array_values($DB->get_records(self::TABLE, ['authorid' => $authorid], 'timecreated ASC'));
-    }
-
-    /**
-     * Delete all comments authored by a specific user (for privacy provider).
-     *
-     * @param int $authorid Author user ID.
-     */
-    public static function delete_comments_by_author(int $authorid): void {
-        global $DB;
-        $DB->delete_records(self::TABLE, ['authorid' => $authorid]);
-    }
-
-    /**
-     * Delete all comments about a specific user (for privacy provider).
-     *
-     * @param int $userid Student user ID.
-     */
-    public static function delete_comments_about_user(int $userid): void {
-        global $DB;
-        $DB->delete_records(self::TABLE, ['userid' => $userid]);
     }
 }

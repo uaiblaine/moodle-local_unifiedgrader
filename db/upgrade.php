@@ -29,7 +29,7 @@
  * @return bool
  */
 function xmldb_local_unifiedgrader_upgrade($oldversion) {
-    global $DB;
+    global $CFG, $DB;
 
     $dbman = $DB->get_manager();
 
@@ -463,6 +463,148 @@ function xmldb_local_unifiedgrader_upgrade($oldversion) {
         }
 
         upgrade_plugin_savepoint(true, 2026071601, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026100100) {
+        // Per-activity late penalty switch, used from Moodle 5.3 when Unified
+        // Grader takes over late penalties for assignments, forums and quizzes.
+        // Activities without a row fall back to their type's default, so there
+        // is nothing to backfill here.
+        $table = new xmldb_table('local_unifiedgrader_penset');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('enabled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_cmid', XMLDB_INDEX_UNIQUE, ['cmid']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026100100, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026100200) {
+        // Friction Feedback: one row per posted mark the student still has to
+        // read, and one row per activity that forces the walk on or off.
+        $table = new xmldb_table('local_unifiedgrader_friction');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('itemid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('gradetimemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('state', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'pending');
+        $table->add_field('step', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecompleted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_item_user_time', XMLDB_INDEX_UNIQUE, ['itemid', 'userid', 'gradetimemodified']);
+        $table->add_index('ix_cmid_userid', XMLDB_INDEX_NOTUNIQUE, ['cmid', 'userid']);
+        $table->add_index('ix_state', XMLDB_INDEX_NOTUNIQUE, ['state']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        $table = new xmldb_table('local_unifiedgrader_frictioncfg');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('mode', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'on');
+        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_cmid', XMLDB_INDEX_UNIQUE, ['cmid']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026100200, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026100201) {
+        // A finished walk used to open the cell and leave a quiz grade item
+        // hidden, so the gradebook still hid the mark. This reads grade rows
+        // only. The module list is unavailable while the upgrade is running.
+        \local_unifiedgrader\friction\service::reveal_completed_hidden();
+
+        upgrade_plugin_savepoint(true, 2026100201, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026101500) {
+        // The role that lets a student with a forum extension post after the
+        // forum's cut-off. Created now so administrators can see it; it is also
+        // created on first use should it ever be deleted.
+        \local_unifiedgrader\dates\forum_cutoff_access::roleid();
+        // Extensions granted before this release that already pass the cut-off.
+        \local_unifiedgrader\dates\forum_cutoff_access::reconcile();
+
+        upgrade_plugin_savepoint(true, 2026101500, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026101601) {
+        // Link each assignment comment to core's submission comment (issue #24).
+        $table = new xmldb_table('local_unifiedgrader_scomm');
+        $field = new xmldb_field('corecommentid', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'timemodified');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $index = new xmldb_index('ix_corecommentid', XMLDB_INDEX_NOTUNIQUE, ['corecommentid']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+        // Linking, importing and pushing need the assignment API, which is
+        // not safe to use mid-upgrade; a task does it after.
+        \core\task\manager::queue_adhoc_task(new \local_unifiedgrader\task\sync_assign_comments(), true);
+
+        upgrade_plugin_savepoint(true, 2026101601, 'local', 'unifiedgrader');
+    }
+
+    if ($oldversion < 2026102200) {
+        // A site on this fork's 2.12.1+uai releases (2026101200 to 2026101203) is
+        // already past upstream's 2026100100 and 2026100200 steps, so it never ran
+        // them and lacks the three tables they create. Create them here, exactly
+        // as those steps and install.xml do; a site that did run them has the
+        // tables and skips each one. Upstream's 2026100201 step needs nothing
+        // here: it opens cells hidden by finished walks, and such a site has none.
+        $table = new xmldb_table('local_unifiedgrader_penset');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('enabled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_cmid', XMLDB_INDEX_UNIQUE, ['cmid']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        $table = new xmldb_table('local_unifiedgrader_friction');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('itemid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('gradetimemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('state', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'pending');
+        $table->add_field('step', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_field('timecompleted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_item_user_time', XMLDB_INDEX_UNIQUE, ['itemid', 'userid', 'gradetimemodified']);
+        $table->add_index('ix_cmid_userid', XMLDB_INDEX_NOTUNIQUE, ['cmid', 'userid']);
+        $table->add_index('ix_state', XMLDB_INDEX_NOTUNIQUE, ['state']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        $table = new xmldb_table('local_unifiedgrader_frictioncfg');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('mode', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'on');
+        $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('uix_cmid', XMLDB_INDEX_UNIQUE, ['cmid']);
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+
+        upgrade_plugin_savepoint(true, 2026102200, 'local', 'unifiedgrader');
     }
 
     return true;
