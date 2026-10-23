@@ -27,6 +27,7 @@
  */
 
 require(__DIR__ . '/../../config.php');
+require_once($CFG->libdir . '/filelib.php');
 
 use local_unifiedgrader\library_csv;
 
