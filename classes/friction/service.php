@@ -276,7 +276,10 @@ class service {
      * @return int How many cells were opened
      */
     public static function open_due(): int {
-        global $DB;
+        global $CFG, $DB;
+
+        // Not loaded on the scheduled task path, and grade_item is not autoloaded.
+        require_once($CFG->libdir . '/gradelib.php');
 
         $now = time();
         $beforeend = self::config_int('friction_daysbeforeend', 14) * DAYSECS;
@@ -615,7 +618,10 @@ class service {
      * @return int How many students were shown
      */
     public static function reveal_completed_hidden(): int {
-        global $DB;
+        global $CFG, $DB;
+
+        // Not loaded when the upgrade runs this, and grade_item is not autoloaded.
+        require_once($CFG->libdir . '/gradelib.php');
 
         $rows = $DB->get_records_select(
             'local_unifiedgrader_friction',

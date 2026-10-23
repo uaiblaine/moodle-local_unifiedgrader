@@ -615,6 +615,116 @@ final class service_test extends \advanced_testcase {
     }
 
     /**
+     * The scheduled task path opens a due cell without the gradebook library loaded.
+     */
+    public function test_open_due_loads_the_gradebook_library_itself(): void {
+        $this->resetAfterTest();
+        $this->preventResetByRollback();
+        $this->enable_friction();
+        $due = $this->post_one();
+        $this->set_enddate($due->course, time() - DAYSECS);
+        $this->assertSame(service::STATE_PENDING, $this->friction_state($due->itemid, $due->student->id));
+
+        $result = $this->run_child('open_due');
+
+        // The state of the failing task: without it the test proves nothing.
+        $this->assertFalse($result['before'], 'The child process booted with grade_item loaded.');
+        $this->assertSame(1, $result['result'], json_encode($result));
+        $this->assertSame(0, $this->cell_hidden($due->itemid, $due->student->id));
+    }
+
+    /**
+     * The upgrade repair reads grade items without the gradebook library loaded.
+     */
+    public function test_reveal_completed_hidden_loads_the_gradebook_library_itself(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $this->preventResetByRollback();
+        $this->enable_friction();
+        $built = $this->graded_assignment();
+        $student = $built->scenario->students[0];
+        $built->adapter->set_grades_posted(0, [$student->id]);
+        $DB->set_field('local_unifiedgrader_friction', 'state', service::STATE_COMPLETE, [
+            'itemid' => $built->adapter->get_grade_item()->id,
+        ]);
+
+        $result = $this->run_child('reveal_completed_hidden');
+
+        $this->assertFalse($result['before'], 'The child process booted with grade_item loaded.');
+        $this->assertSame(0, $result['result'], json_encode($result));
+    }
+
+    /**
+     * Call a service method in a child PHP process that has booted only lib/setup.php.
+     *
+     * The calling test commits its data first (preventResetByRollback()), or the child sees nothing.
+     * Before a test starts, this process has loaded the gradebook through other plugins' lib.php files,
+     * so the missing require cannot show here. The child boots as admin/tool/phpunit/cli/util.php does.
+     * A boot that rebuilds the plugin caches loads every lib.php, so a first child only boots, and the
+     * second one, on the caches the first left, makes the call. The call is made once: it writes.
+     *
+     * @param string $method Name of a static method of the service.
+     * @return array Keys: before (bool), result (int) or error (string).
+     */
+    private function run_child(string $method): array {
+        $this->run_child_script('');
+        return $this->run_child_script($method);
+    }
+
+    /**
+     * Run the child script once.
+     *
+     * @param string $method Static method of the service to call, or '' to only boot.
+     * @return array Keys: before (bool), result (int) or error (string).
+     */
+    private function run_child_script(string $method): array {
+        global $CFG, $DB;
+        $child = <<<'PHP'
+            <?php
+            define('PHPUNIT_UTIL', true);
+            require($argv[1]);
+            require($argv[2]);
+            $out = ['before' => class_exists('grade_item', false)];
+            try {
+                if ($argv[3] !== '') {
+                    $out['result'] = \local_unifiedgrader\friction\service::{$argv[3]}();
+                }
+            } catch (\Throwable $e) {
+                $out['error'] = get_class($e) . ': ' . $e->getMessage();
+            }
+            echo json_encode($out);
+            PHP;
+        $script = make_request_directory() . '/friction_child.php';
+        file_put_contents($script, $child);
+        $loader = new \ReflectionClass(\Composer\Autoload\ClassLoader::class);
+        $command = [
+            PHP_BINARY,
+            $script,
+            dirname($loader->getFileName(), 2) . '/autoload.php',
+            $CFG->libdir . '/phpunit/bootstrap.php',
+            $method,
+        ];
+        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $this->assertIsResource($process);
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+
+        // The child writes through its own connection, so the reset after this test cannot see which
+        // tables it touched: mark them all, or its rows outlive the test and collide with later ones.
+        foreach (array_keys($DB->get_tables(false)) as $table) {
+            \testing_util::set_table_modified_by_sql(' ' . $DB->get_prefix() . $table);
+        }
+
+        $result = json_decode((string) $stdout, true);
+        $this->assertIsArray($result, "The child process exited with $exit:\n$stdout\n$stderr");
+        $this->assertArrayNotHasKey('error', $result, (string) ($result['error'] ?? ''));
+        return $result;
+    }
+
+    /**
      * Turn the site setting on.
      */
     private function enable_friction(): void {

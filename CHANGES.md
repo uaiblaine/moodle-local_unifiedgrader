@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Friction Feedback's scheduled task and its upgrade repair load the gradebook library.** `open_due()` (the
+  `open_friction` task) and `reveal_completed_hidden()` (the 2026100201 upgrade step) name `grade_item`, which
+  nothing had loaded on those paths, so they died with "Class not found" once a due row existed.
+- **The comment library CSV export loads `filelib.php`.** `export_library_csv.php` calls `send_file()`, which a
+  site-level login does not load.
+
 ## v3.0.1+uai.2 (2026102201)
 
 - **Posting grades waits for the grade being saved.** Posting, now or on a date, for the open student, the
