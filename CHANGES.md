@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **The comment library CSV export loads `filelib.php`.** `export_library_csv.php` calls `send_file()`, which a
+  site-level login does not load.
+
 ## v2.12.1+uai.5 (2026101203)
 
 - **The grader's reads no longer wait for the session lock.** Sixteen of the seventeen read web services
