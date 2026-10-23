@@ -678,7 +678,7 @@ final class service_test extends \advanced_testcase {
      * @return array Keys: before (bool), result (int) or error (string).
      */
     private function run_child_script(string $method): array {
-        global $CFG;
+        global $CFG, $DB;
         $child = <<<'PHP'
             <?php
             define('PHPUNIT_UTIL', true);
@@ -711,6 +711,12 @@ final class service_test extends \advanced_testcase {
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exit = proc_close($process);
+
+        // The child writes through its own connection, so the reset after this test cannot see which
+        // tables it touched: mark them all, or its rows outlive the test and collide with later ones.
+        foreach (array_keys($DB->get_tables(false)) as $table) {
+            \testing_util::set_table_modified_by_sql(' ' . $DB->get_prefix() . $table);
+        }
 
         $result = json_decode((string) $stdout, true);
         $this->assertIsArray($result, "The child process exited with $exit:\n$stdout\n$stderr");
